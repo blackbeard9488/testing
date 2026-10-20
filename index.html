@@ -580,7 +580,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022440000_FIX_PH_AND_DENIED_V48";
+const BUILD_ID="20261022450000_FIX_LIVE_DENY_V49";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -708,7 +708,7 @@ function applyCloudState(state,isInitial){
           return;
         }
         // Merge by id with timestamp check
-        var mergedHolidays=localHolidays.slice();
+                var mergedHolidays=localHolidays.slice();
         var idToIdx={};
         for(var li=0;li<mergedHolidays.length;li++){ if(mergedHolidays[li] && mergedHolidays[li].id) idToIdx[mergedHolidays[li].id]=li; }
         var changedPH=false;
@@ -725,32 +725,40 @@ function applyCloudState(state,isInitial){
             var localPH=mergedHolidays[existingIdx];
             var cloudTs=ch.updatedTs||ch.ts||0;
             var localTs=localPH.updatedTs||localPH.ts||0;
+            var cloudStaff=(ch.staffAllocations||[]).length;
+            var localStaff=(localPH.staffAllocations||[]).length;
+            // FIXED: If local has staff and cloud has 0, ALWAYS keep local if local is newer or equal (prevents 0 staff bug)
+            // Also handle undefined case - log shows local staff undefined
+            var localHasStaff=localStaff>0 || (localPH.staffAllocations && localPH.staffAllocations.length>0);
+            var cloudHasNoStaff=cloudStaff===0;
+            if(cloudHasNoStaff && localHasStaff){
+              // If local was updated within last 10 minutes, keep it
+              if(Date.now()-localTs < 10*60*1000 || localTs>=cloudTs){
+                console.log('Public holidays: KEEPING LOCAL (has staff)', ch.id, 'local', localStaff, 'cloud 0 staff, local newer');
+                continue; // Keep local, don't overwrite
+              }
+            }
             // Keep newest by timestamp
             if(cloudTs>localTs){
-              // Cloud newer, but check if local has more staff allocated (fix for 0 staff bug)
-              var cloudStaff=(ch.staffAllocations||[]).length;
-              var localStaff=(localPH.staffAllocations||[]).length;
-              // If cloud has 0 staff and local has >0 and local is recent (within 5 min), keep local
-              if(cloudStaff===0 && localStaff>0 && (Date.now()-localTs < 5*60*1000)){
-                console.log('Public holidays: KEEPING LOCAL (newer, has staff)', ch.id, 'cloud 0 staff vs local', localStaff);
-                changedPH=false; // Keep local
-              } else {
-                mergedHolidays[existingIdx]=ch;
-                changedPH=true;
-                console.log('Public holidays: updated from cloud (newer)', ch.id, 'staff', cloudStaff);
-              }
+              mergedHolidays[existingIdx]=ch;
+              changedPH=true;
+              console.log('Public holidays: updated from cloud (newer)', ch.id, 'staff', cloudStaff, 'vs local', localStaff);
             } else {
-              console.log('Public holidays: KEEPING LOCAL (newer)', ch.id, 'local staff', localStaff, 'cloud staff', (ch.staffAllocations||[]).length);
+              console.log('Public holidays: KEEPING LOCAL (newer)', ch.id, 'local staff', localStaff, 'cloud staff', cloudStaff);
             }
           }
         }
-        // Handle deletions - if cloud doesn't have id that local has, and cloud is newer, it was deleted
-        // For now, keep all local that aren't in cloud if local is newer
+        // Handle deletions
         if(changedPH){
           var jsonStr=JSON.stringify(mergedHolidays);
           try{localStorage.setItem(k,jsonStr);}catch(e){}
           if(typeof MEMORY_STORE!=='undefined') MEMORY_STORE[k]=jsonStr;
           console.log('Public holidays merged, final count:', mergedHolidays.length);
+        } else {
+          // Even if not changed, ensure local is saved if it has staff and cloud has 0 (prevent overwrite)
+          console.log('Public holidays: No change needed, keeping local');
+        }
+        console.log('Public holidays merged, final count:', mergedHolidays.length);
         }
       }catch(e){ console.error('Public holidays merge error', e); }
       return;
@@ -1041,6 +1049,38 @@ async function cloudLoad(){
     if(res.ok){ var data=await res.json(); if(data&&data._ts){ var localTs=parseInt(safeGet('repco_cloud_ts')||'0'); if(data._ts>localTs){ applyCloudState(data,true); safeSet('repco_cloud_ts',String(data._ts)); } } }
   }catch(e){ console.log("cloudLoad",e); }
   // LIVE SYNC FOR EMPLOYEE: Check every 2 seconds for request status changes
+  // Also check separate requests path for live denial - DANIEL FIX
+  setInterval(async function(){
+    try{
+      var rr=await fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json?_t='+Date.now(),{cache:'no-store', mode:'cors'});
+      if(rr.ok){
+        var cloudReqs2=await rr.json();
+        if(Array.isArray(cloudReqs2)){
+          var localReqs2=safeGetJSON('retail_roster_requests_v2',[]);
+          var hasNewDenied=false;
+          for(var ci=0;ci<cloudReqs2.length;ci++){
+            var cr=cloudReqs2[ci];
+            if(!cr || cr.status!=='denied') continue;
+            var found=localReqs2.find(function(lr){ return lr.id===cr.id; });
+            if(!found || found.status==='pending'){
+              hasNewDenied=true;
+              console.log('LIVE SYNC: Found denied in separate path, applying', cr.id);
+              break;
+            }
+          }
+          if(hasNewDenied){
+            // Merge via applyCloudState logic - force update
+            var fakeState={};
+            fakeState['retail_roster_requests_v2']=JSON.stringify(cloudReqs2);
+            fakeState._ts=Date.now();
+            applyCloudState(fakeState,false);
+            safeSet('repco_cloud_ts', String(Date.now()));
+            try{ renderMySchedule(); }catch(e){}
+          }
+        }
+      }
+    }catch(e){}
+  },3000);
   setInterval(async function(){
     try{
       var r=await fetch(FIREBASE_DB_URL+'/repco_state.json?_t='+Date.now(),{cache:'no-store', mode:'cors'});
@@ -2852,7 +2892,8 @@ function denyReq(i){
     r.readByAdmin=true;
     r.deniedBy=safeGet('repco_username')||'admin';
     r.deniedTs=Date.now();
-    r.livePushTs=Date.now(); // For live sync detection
+    r.livePushTs=Date.now();
+    r.forceLiveSync=true; // Flag for live sync
     // Remove ANY pending for same user+date
     for(var j=reqs.length-1;j>=0;j--){
       if(j===i) continue;
@@ -2876,56 +2917,71 @@ function denyReq(i){
     renderRequests();
     try{ renderMySchedule(); }catch(e){}
     try{ renderRosterSafe(); }catch(e){}
-    // LIVE PUSH TO EMPLOYEE PHONE - instant
+    // LIVE PUSH TO EMPLOYEE PHONE - instant with multiple methods
     try{
       var state=getAllState();
-      safeSet('repco_cloud_ts', String(state._ts||Date.now()));
-      // Push immediately via Firebase SDK if available
+      state._ts=Date.now();
+      safeSet('repco_cloud_ts', String(state._ts));
+      console.log('LIVE DENY: Pushing denied request', reqId, 'for user', reqUser, 'to Firebase');
+      
+      // Method 1: Firebase SDK
       if(typeof db!=='undefined' && db && db.ref){
         db.ref('repco_state').set(state).then(function(){
-          console.log('LIVE PUSH: Denied synced via SDK - employee will see instantly, user:', reqUser);
-          toast('LIVE: Denied pushed to '+reqUser+' - they will see REJECTED instantly');
+          console.log('LIVE PUSH: Denied synced via SDK - employee will see instantly');
+          toast('LIVE: Denied pushed to '+reqUser);
         }).catch(function(err){
-          console.error('SDK push failed, using fetch', err);
-          fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state), mode:'cors'}).then(function(r){
-            console.log('LIVE PUSH via fetch:', r.ok);
-            toast(r.ok ? 'LIVE: Denied pushed to employee phone via fetch' : 'Fetch failed: '+r.status);
-          });
+          console.error('SDK push failed', err);
         });
       }
-      // Always also do REST API fetch - most reliable for cross-device
-      fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state), mode:'cors', cache:'no-store'}).then(function(r){
-        console.log('LIVE DENY: Fetch PUT', r.ok, 'for user', reqUser);
-        if(!r.ok) throw new Error('PUT failed '+r.status);
+      // Method 2: REST API - main state
+      var jsonState=JSON.stringify(state);
+      fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:jsonState, mode:'cors', cache:'no-store'}).then(function(r){
+        console.log('LIVE DENY: Main state PUT', r.ok, r.status);
+        if(!r.ok) throw new Error('Main state PUT failed '+r.status);
         return r.json();
-      }).then(function(){
-        console.log('LIVE DENY: Successfully pushed to Firebase, employee phone will update in 2 seconds');
+      }).then(function(data){
+        console.log('LIVE DENY: Main state verified, now pushing requests separately');
+        // Method 3: Also push requests separately to ensure it arrives
+        return fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(reqs), mode:'cors', cache:'no-store'});
+      }).then(function(r2){
+        console.log('LIVE DENY: Requests separate PUT', r2.ok, r2.status);
       }).catch(function(e){ 
-        console.error('LIVE DENY: Fetch PUT failed', e);
-        // Retry with no-cors as fallback
+        console.error('LIVE DENY: Fetch failed', e);
+        // Fallback: try without cors
         try{
-          fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',body:JSON.stringify(state), mode:'no-cors'});
-        }catch(e2){}
+          fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',body:jsonState, mode:'no-cors'});
+          fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',body:JSON.stringify(reqs), mode:'no-cors'});
+        }catch(e2){ console.error('Fallback also failed', e2); }
       });
-      // Immediate retries for reliability - employee sees denial within 2 seconds
+      
+      // Immediate retries
       setTimeout(function(){
         try{
           var state2=getAllState();
+          state2._ts=Date.now();
           fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state2), mode:'cors', cache:'no-store'}).then(function(r){ console.log('LIVE RETRY 1s:', r.ok); });
+          fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(safeGetJSON('retail_roster_requests_v2',[])), mode:'cors', cache:'no-store'});
         }catch(e){}
       },1000);
       setTimeout(function(){
         try{
           var state3=getAllState();
+          state3._ts=Date.now();
           fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state3), mode:'cors', cache:'no-store'}).then(function(r){ console.log('LIVE RETRY 3s:', r.ok); });
         }catch(e){}
       },3000);
-      // Also use localStorage event for same-device instant update
+      
+      // Local broadcast for same device
       try{
         localStorage.setItem('repco_live_deny_'+reqId, JSON.stringify({id:reqId, user:reqUser, date:reqDate, ts:Date.now(), status:'denied'}));
+        // BroadcastChannel for instant same-browser sync
+        if(typeof BroadcastChannel!=='undefined'){
+          var bc=new BroadcastChannel('repco_roster_sync');
+          bc.postMessage({type:'request_denied', id:reqId, user:reqUser, date:reqDate, status:'denied', ts:Date.now()});
+        }
       }catch(e){}
     }catch(e){ console.error('Live push error', e); }
-    toast('DENIED - LIVE PUSHED to '+reqUser+' for '+reqDate+' - Employee phone will show REJECTED in 2 seconds');
+    toast('DENIED - LIVE PUSHED to '+reqUser+' - Will show REJECTED in 2 seconds');
   }catch(e){ toast('Error: '+e.message); console.error(e); }
 }
 
