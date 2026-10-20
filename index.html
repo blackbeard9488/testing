@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022700002_TAPPABLE_NO_BUTTONS_V127";
+const BUILD_ID="20261022700005_FIX_EDIT_GREEN_DELETE_V130";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -877,6 +877,24 @@ function applyCloudState(state,isInitial){
         var cloudTs=state._ts||0;
         var localUpdateTs=parseInt(safeGet('repco_cloud_ts')||'0');
         var requestsUpdateTs=parseInt(safeGet('retail_roster_requests_update_ts')||'0');
+        // V130 FIX: Filter cloud requests that were deleted locally
+        var filteredCloudReqs=[];
+        for(var ci=0;ci<cloudReqs.length;ci++){
+          var cr=cloudReqs[ci];
+          if(!cr || !cr.id) { filteredCloudReqs.push(cr); continue; }
+          var delMark=null;
+          try{ delMark=localStorage.getItem('retail_roster_deleted_'+cr.id); }catch(e){}
+          if(delMark){
+            console.log('V130: Skipping cloud request that was deleted locally', cr.id);
+            changed=true;
+            continue;
+          }
+          filteredCloudReqs.push(cr);
+        }
+        cloudReqs=filteredCloudReqs;
+        // Rebuild cloudIds after filtering
+        cloudIds={};
+        for(var ci=0;ci<cloudReqs.length;ci++){ if(cloudReqs[ci] && cloudReqs[ci].id) cloudIds[cloudReqs[ci].id]=true; }
         var toRemove=[];
         for(var li=0;li<merged.length;li++){
           var lr=merged[li];
@@ -1005,6 +1023,7 @@ async function cloudLoad(){
         try{
           var state=snapshot.val();
           if(!state) return;
+          try{ if(isRosterEditing()){ console.log('Cloud sync skipped - editing'); return; } }catch(e){}
           var localTs=parseInt(safeGet('repco_cloud_ts')||'0');
           var cloudTs=state._ts||0;
           if(cloudTs>localTs){
@@ -1072,7 +1091,8 @@ async function cloudLoad(){
       if(JSON.stringify(localFns)!==JSON.stringify(cloudFns)){
         console.log('LIVE SYNC: Roster changed via direct poll, updating My Schedule');
         safeSetJSON('retail_roster_byFortnight_v1', cloudFns);
-        try{ renderRosterSafe(); }catch(e){}
+        try{ deduplicateAllRosters(false); }catch(e){}
+  try{ renderRosterSafe(); }catch(e){}
         try{ renderMySchedule(); }catch(e){}
         try{ updateMyScheduleCard(); }catch(e){}
       }
@@ -1471,6 +1491,54 @@ function enforceOnly8Fulltime(){
   if(changed) safeSetJSON('retail_roster_byFortnight_v1',fns);
 }
 
+function deduplicateAllRosters(showToast){
+  try{
+    var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+    var totalRemoved=0;
+    for(var f=0;f<fns.length;f++){
+      var fn=fns[f];
+      if(!fn.staff) continue;
+      var seen={};
+      var newStaff=[];
+      for(var s=0;s<fn.staff.length;s++){
+        var st=fn.staff[s];
+        if(!st || !st.firstName || !st.lastName) continue;
+        var key=(st.firstName+' '+st.lastName).toUpperCase().trim();
+        var unameKey=(st.username||'').toLowerCase().trim();
+        var dupKey=unameKey ? 'u:'+unameKey : 'n:'+key;
+        // Also check by name key to catch duplicates with different usernames
+        if(seen[dupKey] || seen['n:'+key]){
+          totalRemoved++;
+          console.log('Removing duplicate staff in '+fn.label+': '+st.firstName+' '+st.lastName+' ('+unameKey+')');
+          continue;
+        }
+        seen[dupKey]=true;
+        seen['n:'+key]=true;
+        newStaff.push(st);
+      }
+      if(newStaff.length!==fn.staff.length){
+        fn.staff=newStaff;
+      }
+    }
+    if(totalRemoved>0){
+      safeSetJSON('retail_roster_byFortnight_v1', fns);
+      try{ renderRosterSafe(); }catch(e){}
+      try{ debouncedCloudSave(); cloudSave(); }catch(e){}
+      try{
+        var state=getAllState();
+        if(typeof db!=='undefined' && db && db.ref) db.ref('repco_state').set(state);
+        else fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
+      }catch(e){}
+      if(showToast) toast('Removed '+totalRemoved+' duplicate staff entries - LIVE synced');
+      console.log('Deduplicated rosters, removed '+totalRemoved);
+    } else {
+      if(showToast) toast('No duplicates found');
+    }
+    return totalRemoved;
+  }catch(e){ console.error('deduplicate error', e); if(showToast) toast('Dedupe error: '+e.message); return 0; }
+}
+
+
 
 
 
@@ -1614,7 +1682,23 @@ function applyAutoGStatus(){
   }catch(e){ console.error('applyAutoGStatus', e); }
 }
 
+var _rosterEditActive=false;
+function isRosterEditing(){
+  try{
+    if(_rosterEditActive) return true;
+    var mount=document.getElementById('roster-mount');
+    if(mount && mount.querySelector('input')) return true;
+    if(document.querySelector('.r-table input')) return true;
+  }catch(e){}
+  return false;
+}
 function renderRosterSafe(){
+  try{
+    if(isRosterEditing()){
+      console.log('renderRosterSafe skipped - editing active');
+      return;
+    }
+  }catch(e){}
   try{ applyPublicHolidaysToAllRosters(); }catch(e){}
   try{ applyAutoGStatus(); }catch(e){}
 
@@ -1868,8 +1952,12 @@ function deleteStaffFromRoster(globalIdx, fromAll){
             if(!fn.staff) continue;
             var before=fn.staff.length;
             fn.staff=fn.staff.filter(function(s){
-              if(username && s.username) return s.username.toLowerCase()!==username.toLowerCase();
-              return !(s.firstName===st.firstName && s.lastName===st.lastName);
+              // Delete by username if present, OR by first+last name to catch duplicates with different usernames
+              if(username && s.username && s.username.toLowerCase()===username.toLowerCase()) return false;
+              if(s.firstName && s.lastName && st.firstName && st.lastName){
+                if(s.firstName.toLowerCase()===st.firstName.toLowerCase() && s.lastName.toLowerCase()===st.lastName.toLowerCase()) return false;
+              }
+              return true;
             });
             if(fn.staff.length<before) deletedCount++;
           }
@@ -1877,8 +1965,11 @@ function deleteStaffFromRoster(globalIdx, fromAll){
           // Also remove from hidden staff list if exists
           var hidden=safeGetJSON('retail_roster_hidden_staff_v1',[]);
           hidden=hidden.filter(function(h){
-            if(username && h.username) return h.username.toLowerCase()!==username.toLowerCase();
-            return !(h.firstName===st.firstName && h.lastName===st.lastName);
+            if(username && h.username && h.username.toLowerCase()===username.toLowerCase()) return false;
+            if(h.firstName && h.lastName && st.firstName && st.lastName){
+              if(h.firstName.toLowerCase()===st.firstName.toLowerCase() && h.lastName.toLowerCase()===st.lastName.toLowerCase()) return false;
+            }
+            return true;
           });
           safeSetJSON('retail_roster_hidden_staff_v1', hidden);
           renderRosterSafe();
@@ -1978,6 +2069,7 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
     doEditCell();
     function doEditCell(){
       if(el.querySelector('input')) return;
+      try{ _rosterEditActive=true; }catch(e){}
       var current=staff.shifts[colIdx]||'OFF';
       var draft=getEditDraft();
       var initialValue=current;
@@ -2110,28 +2202,25 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
           }
           safeSetJSON('retail_roster_byFortnight_v1',fns);
           
-          // V115/V121: If admin manually edits a shift that had an approved/denied request, revert to ORIGINAL as if never made
+          // V130: If admin manually edits a shift that had approved/denied request, REVERT GREEN as if never requested - use admin's new edit
           try{
             var allReqs=safeGetJSON('retail_roster_requests_v2',[]);
             var hadApprovedRevert=false;
             var dateObj=cur.dates[colIdx];
             var dateStr=dateObj?dateObj.date:'';
             var isoStr=dateObj?dateObj.iso:'';
-            var originalShiftToRestore=null;
+            var matchedReqs=[];
             for(var ri=0;ri<allReqs.length;ri++){
               var rq=allReqs[ri];
               if(!rq) continue;
               if(rq.status!=='approved' && rq.status!=='denied' && rq.status!=='rejected') continue;
-              // Match staff by username -> staff name
               var match=false;
               if(rq.username){
                 var uname=rq.username.toLowerCase();
                 var first=(staff.firstName||'').toLowerCase();
                 var last=(staff.lastName||'').toLowerCase();
                 var full=(first+' '+last).toLowerCase();
-                if(uname===first || uname===last || uname===full || full.indexOf(uname)!==-1 || uname.indexOf(first)!==-1){
-                  match=true;
-                }
+                if(uname===first || uname===last || uname===full || full.indexOf(uname)!==-1 || uname.indexOf(first)!==-1) match=true;
                 try{
                   var mapped=mapUsernameToStaffKey(rq.username);
                   if(mapped && mapped.firstName && mapped.firstName.toLowerCase()===first){
@@ -2140,7 +2229,6 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
                 }catch(e){}
               }
               if(!match) continue;
-              // Match date by idx or date string or iso
               var dateMatch=false;
               if(typeof rq.shiftIdx==='number' && rq.shiftIdx===colIdx) dateMatch=true;
               if(rq.shiftDate && dateStr && rq.shiftDate.indexOf(dateStr)!==-1) dateMatch=true;
@@ -2151,46 +2239,22 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
                 }
               }
               if(!dateMatch) continue;
-              // This approved/denied request matches the manually edited cell - revert to ORIGINAL as if never made
-              console.log('V121: Admin manually edited '+rq.status+' request', rq.id, 'for', staff.firstName, dateStr, ' - reverting to ORIGINAL as if never made');
-              // Save original shift to restore - try all sources
-              if(rq.oldShift) originalShiftToRestore=rq.oldShift;
-              else if(staff.originalShifts && staff.originalShifts[colIdx]!=null) originalShiftToRestore=staff.originalShifts[colIdx];
-              else if(targetStaff && targetStaff.originalShifts && targetStaff.originalShifts[colIdx]!=null) originalShiftToRestore=targetStaff.originalShifts[colIdx];
-              else {
-                // Fallback: try to find original from fns backup or from request dates
-                try{
-                  var fnsTmp=safeGetJSON('retail_roster_byFortnight_v1',[]);
-                  var fnTmp=fnsTmp.find(function(f){return f.id===cur.id;});
-                  if(fnTmp && fnTmp.staff && fnTmp.staff[rowIdx] && fnTmp.staff[rowIdx].originalShifts && fnTmp.staff[rowIdx].originalShifts[colIdx]!=null){
-                    originalShiftToRestore=fnTmp.staff[rowIdx].originalShifts[colIdx];
-                  }
-                }catch(e){}
-              }
-              // If still null and admin typed empty, use that as signal to restore
-              if(!originalShiftToRestore && !newVal){
-                // Admin cleared cell - try to get from any backup
-                try{
-                  if(staff.originalShifts && Object.keys(staff.originalShifts).length>0){
-                    originalShiftToRestore=staff.originalShifts[colIdx]||staff.originalShifts[String(colIdx)]||null;
-                  }
-                }catch(e){}
-              }
-              // Mark as superseded - history kept but My Schedule will show normal original
+              console.log('V130: Admin editing approved cell - will supersede', rq.id, 'for', staff.firstName, dateStr);
               rq.status='superseded';
               rq.supersededTs=Date.now();
               rq.supersededBy=safeGet('repco_username')||'admin';
-              rq.supersededNote='Admin edited roster cell - reverted to original '+ (originalShiftToRestore||'state') +' as if request never made - was '+rq.newShift;
+              rq.supersededNote='Admin manually edited roster cell from '+(rq.newShift||'')+' to '+actualShift+' - green cleared as if never requested';
               rq.readByStaff=false;
+              matchedReqs.push(rq.id);
               hadApprovedRevert=true;
             }
             if(hadApprovedRevert){
-              // V121/V122: Restore ORIGINAL shift on roster as if request never made, or keep adjusted if no original
-              var shiftToUse=originalShiftToRestore||actualShift;
-              console.log('V122: Reverting, original', originalShiftToRestore, 'adjusted', actualShift, 'using', shiftToUse, 'for', staff.firstName, dateStr);
-              staff.shifts[colIdx]=shiftToUse;
-              if(targetStaff) targetStaff.shifts[colIdx]=shiftToUse;
-              // Clear originalShifts, green, absent flags - as if never made - THIS IS KEY FOR MY SCHEDULE TO SHOW NORMAL
+              // CRITICAL: Use admin's new edited shift (actualShift), NOT original - and CLEAR GREEN
+              console.log('V130: Clearing green for', staff.firstName, dateStr, 'new shift', actualShift, 'matched reqs', matchedReqs.join(','));
+              // Ensure staff object uses admin's edit
+              staff.shifts[colIdx]=actualShift;
+              if(targetStaff) targetStaff.shifts[colIdx]=actualShift;
+              // Clear ALL approval-related flags - revert as if never requested
               if(staff.originalShifts) { try{ delete staff.originalShifts[colIdx]; delete staff.originalShifts[String(colIdx)]; }catch(e){ staff.originalShifts[colIdx]=undefined; } }
               if(targetStaff && targetStaff.originalShifts) { try{ delete targetStaff.originalShifts[colIdx]; delete targetStaff.originalShifts[String(colIdx)]; }catch(e){ targetStaff.originalShifts[colIdx]=undefined; } }
               if(staff.cellGreen) staff.cellGreen[colIdx]=false;
@@ -2199,38 +2263,43 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
               if(targetStaff && targetStaff.cellG) targetStaff.cellG[colIdx]=false;
               if(staff.absentApproved) staff.absentApproved[colIdx]=false;
               if(targetStaff && targetStaff.absentApproved) targetStaff.absentApproved[colIdx]=false;
-              // Update fns array - ensure My Schedule sees normal
+              // If new shift is AB/UA, set appropriate flags, else clear
+              if(actualShift.toUpperCase()==='AB'){
+                if(!staff.absentApproved) staff.absentApproved=[];
+                staff.absentApproved[colIdx]=true;
+                if(targetStaff){ if(!targetStaff.absentApproved) targetStaff.absentApproved=[]; targetStaff.absentApproved[colIdx]=true; }
+              }
+              if(actualShift.toUpperCase()==='UA' || actualShift.toUpperCase()==='NA'){
+                if(!staff.unavailable) staff.unavailable=[];
+                staff.unavailable[colIdx]=true;
+                if(targetStaff){ if(!targetStaff.unavailable) targetStaff.unavailable=[]; targetStaff.unavailable[colIdx]=true; }
+              }
+              // Update fns array for persistence
               try{
                 var fns2=safeGetJSON('retail_roster_byFortnight_v1',[]);
                 var fnIdx2=fns2.findIndex(function(f){return f.id===cur.id;});
                 if(fnIdx2!==-1 && fns2[fnIdx2].staff && fns2[fnIdx2].staff[rowIdx]){
-                  fns2[fnIdx2].staff[rowIdx].shifts[colIdx]=shiftToUse;
-                  if(fns2[fnIdx2].staff[rowIdx].originalShifts) { try{ delete fns2[fnIdx2].staff[rowIdx].originalShifts[colIdx]; delete fns2[fnIdx2].staff[rowIdx].originalShifts[String(colIdx)]; }catch(e){} }
-                  if(fns2[fnIdx2].staff[rowIdx].cellGreen) fns2[fnIdx2].staff[rowIdx].cellGreen[colIdx]=false;
-                  if(fns2[fnIdx2].staff[rowIdx].cellG) fns2[fnIdx2].staff[rowIdx].cellG[colIdx]=false;
-                  if(fns2[fnIdx2].staff[rowIdx].absentApproved) fns2[fnIdx2].staff[rowIdx].absentApproved[colIdx]=false;
+                  var s2=fns2[fnIdx2].staff[rowIdx];
+                  s2.shifts[colIdx]=actualShift;
+                  if(s2.originalShifts) { try{ delete s2.originalShifts[colIdx]; delete s2.originalShifts[String(colIdx)]; }catch(e){} }
+                  if(s2.cellGreen) s2.cellGreen[colIdx]=false;
+                  if(s2.cellG) s2.cellG[colIdx]=false;
+                  if(s2.absentApproved) s2.absentApproved[colIdx]=(actualShift.toUpperCase()==='AB');
+                  if(s2.unavailable) s2.unavailable[colIdx]=(actualShift.toUpperCase()==='UA' || actualShift.toUpperCase()==='NA');
                   safeSetJSON('retail_roster_byFortnight_v1', fns2);
-                  fns=fns2; // use updated for cloud push
+                  fns=fns2;
                 }
-              }catch(e){ console.log('V122 restore fns error', e); }
-              actualShift=shiftToUse; // for toast and cloud push
-              
+              }catch(e){ console.log('V130 restore fns error', e); }
               safeSetJSON('retail_roster_requests_v2', allReqs);
               try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
-              // Sync to cloud
               try{
                 var state2=getAllState();
                 state2._ts=Date.now();
                 safeSet('repco_cloud_ts', String(state2._ts));
-                if(typeof db!=='undefined' && db && db.ref){
-                  db.ref('repco_state').set(state2);
-                } else {
-                  fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state2)});
-                }
+                if(typeof db!=='undefined' && db && db.ref) db.ref('repco_state').set(state2);
+                else fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state2)});
                 fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(allReqs),mode:'cors'}).catch(function(){});
-                // Also push roster directly for instant My Schedule
                 try{ fetch(FIREBASE_DB_URL+'/retail_roster_byFortnight_v1.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(fns),mode:'cors'}).catch(function(){}); }catch(e){}
-                // Broadcast instant update
                 try{
                   if(typeof BroadcastChannel!=='undefined'){
                     var bc2=new BroadcastChannel('repco_roster_sync');
@@ -2238,11 +2307,12 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
                   }
                 }catch(e){}
               }catch(e){}
-              toast('Reverted to original - '+staff.firstName+' '+dateStr+' now '+actualShift+' as if never requested');
+              toast('Green cleared - '+staff.firstName+' '+dateStr+' now '+actualShift+' as if never requested (superseded '+matchedReqs.length+' request(s))');
               try{ renderMySchedule(); }catch(e){}
             }
-          }catch(e){ console.error('V121 revert error', e); }
+          }catch(e){ console.error('V130 revert error', e); }
           
+          try{ _rosterEditActive=false; }catch(e){}
           clearEditDraft();
           // V120: Force instant My Schedule update - multiple times for reliability
           try{ renderRosterSafe(); }catch(e){}
@@ -2319,6 +2389,18 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
             saveEdit(input.value);
           }
         }, 200);
+      });
+      input.addEventListener('keydown', function(e){
+        if(e.key==='Escape'){
+          try{ _rosterEditActive=false; }catch(e){}
+          try{ clearEditDraft(); }catch(e){}
+          try{ el.textContent=origText; el.className=origClass; }catch(e){}
+          try{ renderRosterSafe(); }catch(e){}
+        }
+        if(e.key==='Enter'){
+          e.preventDefault();
+          saveEdit(input.value);
+        }
       });
     }
   }catch(e){
@@ -3003,7 +3085,7 @@ function renderAccountMgmtPage(){
   const users=safeGetJSON('retail_roster_users_v1',[]); 
   const fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
   const cur=getCurrentFortnight();
-  let html='<div class="card" style="background:#111;color:#fff;padding:12px;margin-bottom:12px"><div style="font-weight:900;margin-bottom:8px">🔑 BULK PASSWORD RESET</div><div style="font-size:10px;margin-bottom:8px">Set all employee passwords to their first name (e.g., Chris -> Chris, Daniel -> Daniel). Hidden staff and both Michaels excluded. Admin/manager/master accounts excluded.</div><button onclick="adminSetAllPasswordsToFirstname()" style="background:#E30613;color:#fff;border:2px solid #fff;border-radius:9999px;padding:10px 14px;font-weight:900;width:100%">SET ALL PASSWORDS TO FIRSTNAME</button></div><div class="card"><div style="font-weight:900;margin-bottom:8px">ALL USERS - Linked to roster</div><div id="admin-user-list-all">'; 
+  let html='<div class="card" style="background:#111;color:#fff;padding:12px;margin-bottom:12px"><div style="font-weight:900;margin-bottom:8px">🔑 BULK PASSWORD RESET</div><div style="font-size:10px;margin-bottom:8px">Set all employee passwords to their first name (e.g., Chris -> Chris, Daniel -> Daniel). Hidden staff and both Michaels excluded. Admin/manager/master accounts excluded.</div><button onclick="adminSetAllPasswordsToFirstname()" style="background:#E30613;color:#fff;border:2px solid #fff;border-radius:9999px;padding:10px 14px;font-weight:900;width:100%">SET ALL PASSWORDS TO FIRSTNAME</button></div><div class="card" style="background:#fff;border:3px solid #E30613;padding:12px;margin-bottom:12px"><div style="font-weight:900;margin-bottom:8px">🧹 FIX DUPLICATES</div><div style="font-size:10px;margin-bottom:8px">If you deleted a duplicate and it came back, click this to remove duplicate staff (same name) from ALL rosters. This prevents cloud from restoring them.</div><button onclick="deduplicateAllRosters(true)" style="background:#111;color:#fff;border:2px solid #E30613;border-radius:9999px;padding:10px 14px;font-weight:900;width:100%">REMOVE DUPLICATE STAFF - ALL ROSTERS</button></div><div class="card"><div style="font-weight:900;margin-bottom:8px">ALL USERS - Linked to roster</div><div id="admin-user-list-all">'; 
   html+=users.map((u,i)=>{
     var mapped=null;
     try{ mapped=mapUsernameToStaffKey(u.username); }catch(e){}
@@ -4909,7 +4991,7 @@ setInterval(function(){
   }catch(e){}
 },1000);
 document.addEventListener('DOMContentLoaded',()=>{
-  try{ seedIfEmpty(); enforceOnly8Fulltime(); }catch(e){}
+  try{ seedIfEmpty(); enforceOnly8Fulltime(); deduplicateAllRosters(false); }catch(e){}
   // Session persistence check
   try{
     var savedUsername=safeGet('repco_username');
@@ -5498,11 +5580,11 @@ function renderMySchedule(){
       if(found){
         var reqData=found.req; var reqIdx=found.index; var reqStatus=found.status||reqData.status||'pending';
         if(reqStatus==='approved'){
-          // Approved - green, tappable for fresh request (same as normal shift, no buttons)
-          htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+currentShift.idx+', \''+currentShift.date.date+' '+currentShift.date.day+'\', \''+String(currentShift.shift).replace(/'/g, '')+ '\')"><div style="font-weight:900;font-size:12px;color:#111">CURRENT SHIFT - APPROVED & ACTIONED ✓</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+phCurrIcon+currentShift.date.day+' '+currentShift.date.date+(phCurr?' 🎉':'')+' - '+fmt(reqData.oldShift||'')+' → '+fmt(reqData.newShift||currentShift.shift)+'</div><div style="font-size:11px">Reason: '+(reqData.reason||'')+'<br>Status: <b style="color:#111;background:#fff;border-radius:9999px;padding:2px 6px">APPROVED by '+(reqData.approvedBy||'admin')+'</b> - Shift updated</div><div style="margin-top:6px"><span style="background:#111;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">TAP TO REQUEST EDIT</span></div></div>';
+          // Approved - green, tappable for fresh request (same as normal shift, no buttons, no TAP text)
+          htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+currentShift.idx+', \''+currentShift.date.date+' '+currentShift.date.day+'\', \''+String(currentShift.shift).replace(/'/g, '')+ '\')"><div style="font-weight:900;font-size:12px;color:#111">CURRENT SHIFT - APPROVED & ACTIONED ✓</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+phCurrIcon+currentShift.date.day+' '+currentShift.date.date+(phCurr?' 🎉':'')+' - '+fmt(reqData.oldShift||'')+' → '+fmt(reqData.newShift||currentShift.shift)+'</div><div style="font-size:11px">Reason: '+(reqData.reason||'')+'<br>Status: <b style="color:#111;background:#fff;border-radius:9999px;padding:2px 6px">APPROVED by '+(reqData.approvedBy||'admin')+'</b> - Shift updated</div></div>';
         } else if(reqStatus==='denied'){
-          // Denied - grey, tappable for fresh request (same as normal)
-          htmlStr+='<div class="card" style="background:#E5E5E5;border:2px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+currentShift.idx+', \''+currentShift.date.date+' '+currentShift.date.day+'\', \''+String(currentShift.shift).replace(/'/g, '')+ '\')"><div style="font-weight:900;font-size:12px;color:#E30613">CURRENT SHIFT - REJECTED / DENIED</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+phCurrIcon+currentShift.date.day+' '+currentShift.date.date+(phCurr?' 🎉':'')+' - '+fmt(currentShift.shift)+phCurrBadge+'</div><div style="font-size:11px">Your request to change to '+(reqData.newShift||'')+' was <b>REJECTED / DENIED</b><br>Status: <b style="color:#E30613">DENIED by '+(reqData.deniedBy||'admin')+'</b> - Reverted to original</div><div style="margin-top:6px"><span style="background:#111;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">TAP TO REQUEST EDIT</span></div></div>';
+          // Denied - grey, tappable for fresh request (same as normal, no TAP text)
+          htmlStr+='<div class="card" style="background:#E5E5E5;border:2px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+currentShift.idx+', \''+currentShift.date.date+' '+currentShift.date.day+'\', \''+String(currentShift.shift).replace(/'/g, '')+ '\')"><div style="font-weight:900;font-size:12px;color:#E30613">CURRENT SHIFT - REJECTED / DENIED</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+phCurrIcon+currentShift.date.day+' '+currentShift.date.date+(phCurr?' 🎉':'')+' - '+fmt(currentShift.shift)+phCurrBadge+'</div><div style="font-size:11px">Your request to change to '+(reqData.newShift||'')+' was <b>REJECTED / DENIED</b><br>Status: <b style="color:#E30613">DENIED by '+(reqData.deniedBy||'admin')+'</b> - Reverted to original</div></div>';
         } else {
           // Pending - yellow, NO PULSE (as requested)
           htmlStr+='<div class="card" style="background:#FFEB3B;border:3px solid #E30613;"><div style="font-weight:900;font-size:12px;color:#E30613">CURRENT SHIFT - PENDING APPROVAL</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+phCurrIcon+currentShift.date.day+' '+currentShift.date.date+(phCurr?' 🎉':'')+' - '+fmt(currentShift.shift)+phCurrBadge+' -> '+fmt(reqData.newShift)+'</div><div style="font-size:11px">Reason: '+(reqData.reason||'')+'<br>Status: <b style="color:#E30613">PENDING</b> - Awaiting admin</div><div style="margin-top:8px;display:flex;gap:6px"><button onclick="editMyRequest('+reqIdx+')" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">EDIT REQUEST</button><button onclick="deleteMyRequest('+reqIdx+')" style="background:#E30613;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">CANCEL REQUEST</button></div></div>';
@@ -5532,11 +5614,11 @@ function renderMySchedule(){
         if(foundU){
           var reqU=foundU.req; var reqIdx=foundU.index; var reqStatus=foundU.status||reqU.status||'pending';
           if(reqStatus==='approved'){
-            // Approved now tappable like normal shift, no buttons, no description - only switches to pending when new request submitted
-            htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+u.idx+', \''+u.date.date+' '+u.date.day+'\', \''+String(u.shift).replace(/'/g, '')+ '\')"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(reqU.oldShift||'')+' → <b>'+fmt(reqU.newShift||u.shift)+'</b><br><span style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">APPROVED & ACTIONED ✓</span><br><small>Approved by '+(reqU.approvedBy||'admin')+'</small><br><small style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px">TAP TO REQUEST EDIT</small></div>';
+            // Approved now tappable like normal shift, no buttons, no TAP text - only switches to pending when new request submitted
+            htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+u.idx+', \''+u.date.date+' '+u.date.day+'\', \''+String(u.shift).replace(/'/g, '')+ '\')"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(reqU.oldShift||'')+' → <b>'+fmt(reqU.newShift||u.shift)+'</b><br><span style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">APPROVED & ACTIONED ✓</span><br><small>Approved by '+(reqU.approvedBy||'admin')+'</small></div>';
           } else if(reqStatus==='denied'){
-            // Denied now tappable like normal shift, no buttons
-            htmlStr+='<div class="card" style="background:#E5E5E5;border:2px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+u.idx+', \''+u.date.date+' '+u.date.day+'\', \''+String(u.shift).replace(/'/g, '')+ '\')"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+' <span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">REJECTED / DENIED</span> - Reverted to original<br><small>Request for '+fmt(reqU.newShift||'')+' <b>DENIED</b></small><br><small style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px">TAP TO REQUEST EDIT</small></div>';
+            // Denied now tappable like normal shift, no buttons, no TAP text
+            htmlStr+='<div class="card" style="background:#E5E5E5;border:2px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+u.idx+', \''+u.date.date+' '+u.date.day+'\', \''+String(u.shift).replace(/'/g, '')+ '\')"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+' <span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">REJECTED / DENIED</span> - Reverted to original<br><small>Request for '+fmt(reqU.newShift||'')+' <b>DENIED</b></small></div>';
           } else {
             htmlStr+='<div class="card" style="background:#FFEB3B;border:3px solid #E30613;"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+' -> <b style="color:#E30613">'+fmt(reqU.newShift)+'</b><br><span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">PENDING APPROVAL</span><br><small>Reason: '+(reqU.reason||'')+'</small><div style="margin-top:6px;display:flex;gap:6px"><button onclick="editMyRequest('+reqIdx+')" style="background:#111;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">EDIT</button><button onclick="deleteMyRequest('+reqIdx+')" style="background:#E30613;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">CANCEL</button></div></div>';
           }
@@ -6004,6 +6086,7 @@ function updateRequestsBadge(){
 setInterval(function(){ try{ updateRequestsBadge(); }catch(e){} }, 5000);
 // Also listen for storage changes (when another tab/user submits request or roster edited)
 window.addEventListener('storage', function(e){
+  try{ if(isRosterEditing()){ console.log('storage event skipped - editing'); return; } }catch(err){}
   if(e.key && e.key.indexOf('retail_roster_requests')!==-1){
     try{ updateRequestsBadge(); renderRequests(); renderMySchedule(); }catch(err){}
   }
@@ -6200,17 +6283,43 @@ function markAllRequestsRead(){
 }
 
 function deleteRequest(idx){
-  showCustomConfirm('Delete Request?', '<div style="font-size:11px">Delete this request permanently?<br><br>This cannot be undone.</div>', function(confirmed){
+  showCustomConfirm('Delete Request?', '<div style="font-size:11px">Delete this request permanently?<br><br>This will sync LIVE to all devices and prevent it from coming back.</div>', function(confirmed){
     if(!confirmed) return;
     try{
       var reqs=safeGetJSON('retail_roster_requests_v2',[]);
       if(idx>=0 && idx<reqs.length){
+        var delId=reqs[idx].id;
+        // Mark as deleted to prevent cloud restore
+        if(delId){
+          try{ localStorage.setItem('retail_roster_deleted_'+delId, String(Date.now())); }catch(e){}
+          try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
+        }
         reqs.splice(idx,1);
         safeSetJSON('retail_roster_requests_v2', reqs);
         renderRequests();
         updateRequestsBadge();
-        try{ debouncedCloudSave(); }catch(e){}
-        toast('Request deleted');
+        // Force cloud sync - push updated requests without deleted item
+        try{
+          var state=getAllState();
+          state._ts=Date.now();
+          safeSet('repco_cloud_ts', String(state._ts));
+          if(typeof db!=='undefined' && db && db.ref){
+            db.ref('repco_state').set(state);
+            db.ref('retail_roster_requests_v2').set(JSON.stringify(reqs));
+          }
+          // Direct REST push for instant sync
+          fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(reqs),mode:'cors'}).then(function(){ console.log('Deleted request synced LIVE', delId); }).catch(function(){});
+          fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state),mode:'cors'}).catch(function(){});
+          // Broadcast deletion
+          try{
+            if(typeof BroadcastChannel!=='undefined'){
+              var bc=new BroadcastChannel('repco_roster_sync');
+              bc.postMessage({type:'delete_request', id:delId, ts:Date.now()});
+            }
+          }catch(e){}
+        }catch(e){ console.log('delete sync error', e); }
+        try{ debouncedCloudSave(); cloudSave(); }catch(e){}
+        toast('Request deleted - LIVE synced, will not come back');
       }
     }catch(e){ toast('Error: '+e.message); }
   });
