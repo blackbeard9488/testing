@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_ALL_V104";
+const BUILD_ID="20261022690000_FIX_APPROVE_V105";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -3856,83 +3856,158 @@ function submitCorrection(){
 function deleteReq(idx){ showCustomConfirm('Delete this request?','', (ok)=>{ if(!ok) return; let all=safeGetJSON('retail_roster_requests_v2',[]); all.splice(idx,1); safeSetJSON('retail_roster_requests_v2',all); toast('Deleted - synced'); renderRequests(); }); }
 function editReq(idx){ let all=safeGetJSON('retail_roster_requests_v2',[]); const r=all[idx]; if(!r) return; showCustomPrompt('Edit Reason', '<textarea id="edit-reason" style="width:100%;padding:10px;border-radius:12px;border:2px solid #111;min-height:60px">'+(r.reason||'')+'</textarea>', (ok)=>{ if(!ok) return; const nr=document.getElementById('edit-reason').value; r.reason=nr; safeSetJSON('retail_roster_requests_v2',all); toast('Edited - synced'); renderRequests(); }); }
 function approveReq(idx){ 
-  let all=safeGetJSON('retail_roster_requests_v2',[]); 
-  if(!all[idx]) return; 
-  const req=all[idx]; 
-  all[idx].status='approved'; 
-  all[idx].approvedTs=Date.now();
-  all[idx].approvedBy=safeGet('repco_username')||'admin';
-  safeSetJSON('retail_roster_requests_v2',all); 
-  let fns=safeGetJSON('retail_roster_byFortnight_v1',[]); 
-  if(req.type==='unavailability'){ 
-    fns.forEach(fn=>{ 
-      let staff=fn.staff.find(s=>s.firstName.toLowerCase()===req.username.toLowerCase() || (s.username && s.username.toLowerCase()===req.username.toLowerCase())); 
-      if(staff){ 
-        req.dates.forEach(dStr=>{ 
-          let clean=dStr.split(' ')[0].trim(); 
-          let dateIdx=fn.dates.findIndex(d=>d.date===clean || d.iso===clean);
-          if(dateIdx!==-1){
-            if(!staff.originalShifts) staff.originalShifts={};
-            if(!staff.originalShifts[dateIdx]) staff.originalShifts[dateIdx]=staff.shifts[dateIdx];
-            staff.shifts[dateIdx]='OFF';
-            if(!staff.absentApproved) staff.absentApproved={};
-            staff.absentApproved[dateIdx]=false;
-          }
-        }); 
-      } 
-    }); 
-  } else if(req.type==='shift-correction'){
-    fns.forEach(fn=>{
-      let staff=fn.staff.find(s=>s.firstName.toLowerCase()===req.username.toLowerCase() || (s.username && s.username.toLowerCase()===req.username.toLowerCase()));
-      if(staff && req.shiftIdx!==undefined){
-        if(!staff.originalShifts) staff.originalShifts={};
-        staff.originalShifts[req.shiftIdx]=staff.shifts[req.shiftIdx];
-        staff.shifts[req.shiftIdx]=req.newShift;
-      }
-    });
-  }
-  safeSetJSON('retail_roster_byFortnight_v1',fns); 
-  toast('Approved - '+req.username+' notified live, showing APPROVED on My Schedule'); 
-  try{ 
-    var state=getAllState();
-    state._ts=Date.now();
-    state._lastApproveId=req.id;
-    if(typeof db!=='undefined' && db && db.ref){
-      db.ref('repco_state').set(state);
-    } else {
-      fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
+  try{
+    let all=safeGetJSON('retail_roster_requests_v2',[]);
+    if(!all[idx]) { toast('Request not found'); return; }
+    const req=all[idx];
+    console.log('Approving request', req);
+    all[idx].status='approved';
+    all[idx].approvedTs=Date.now();
+    all[idx].approvedBy=safeGet('repco_username')||'admin';
+    safeSetJSON('retail_roster_requests_v2',all);
+    let fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+    var staffMatched=false;
+    function findStaffInFn(fn, username){
+      if(!fn.staff) return null;
+      var u=(username||'').toLowerCase().trim();
+      // Try exact username match
+      var found=fn.staff.find(s=>s.username && s.username.toLowerCase()===u);
+      if(found) return found;
+      // Try firstName match
+      found=fn.staff.find(s=>s.firstName && s.firstName.toLowerCase()===u);
+      if(found) return found;
+      // Try lastName match
+      found=fn.staff.find(s=>s.lastName && s.lastName.toLowerCase()===u);
+      if(found) return found;
+      // Try full name
+      found=fn.staff.find(s=> (s.firstName+' '+s.lastName).toLowerCase()===u || (s.lastName+', '+s.firstName).toLowerCase()===u || (s.lastName+' '+s.firstName).toLowerCase()===u );
+      if(found) return found;
+      // Try contains
+      found=fn.staff.find(s=>s.firstName && u.includes(s.firstName.toLowerCase()));
+      if(found) return found;
+      // Try mapped
+      try{
+        var mapped=mapUsernameToStaffKey(username);
+        if(mapped){
+          found=fn.staff.find(s=>s.firstName && s.lastName && s.firstName.toLowerCase()===mapped.firstName.toLowerCase() && s.lastName.toLowerCase()===mapped.lastName.toLowerCase());
+          if(found) return found;
+          found=fn.staff.find(s=>s.lastName && mapped.lastName && s.lastName.toLowerCase()===mapped.lastName.toLowerCase());
+          if(found) return found;
+        }
+      }catch(e){}
+      return null;
     }
-    fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(all),mode:'cors'}).catch(function(){});
-  }catch(e){}
-  renderRequests(); 
-  renderRosterSafe(); 
-  try{ renderMySchedule(); }catch(e){}
-  applyRoleVisibility(); 
+    if(req.type==='unavailability'){
+      fns.forEach(fn=>{
+        let staff=findStaffInFn(fn, req.username);
+        if(staff){
+          staffMatched=true;
+          (req.dates||[]).forEach(dStr=>{
+            let clean=(dStr||'').split(' ')[0].trim();
+            let dateIdx=fn.dates.findIndex(d=>d.date===clean || d.iso===clean || d.date===dStr || d.iso===dStr);
+            if(dateIdx===-1){
+              // Try match by DD/MM
+              let m=clean.match(/(\d{1,2}\/\d{1,2})/);
+              if(m){
+                dateIdx=fn.dates.findIndex(d=>d.date===m[1] || d.date.includes(m[1]));
+              }
+            }
+            if(dateIdx!==-1){
+              if(!staff.originalShifts) staff.originalShifts={};
+              if(!staff.originalShifts[dateIdx]) staff.originalShifts[dateIdx]=staff.shifts[dateIdx];
+              staff.shifts[dateIdx]='AB';
+              if(!staff.absentApproved) staff.absentApproved={};
+              staff.absentApproved[dateIdx]=true;
+              if(staff.unavailable) staff.unavailable[dateIdx]=false;
+              if(staff.cellGreen) staff.cellGreen[dateIdx]=false;
+              if(staff.cellG) staff.cellG[dateIdx]=false;
+              console.log('Set AB for', staff.firstName, fn.dates[dateIdx].date);
+            }
+          });
+        }
+      });
+    } else if(req.type==='shift-correction'){
+      fns.forEach(fn=>{
+        let staff=findStaffInFn(fn, req.username);
+        if(staff){
+          staffMatched=true;
+          var targetIdx=req.shiftIdx;
+          if(targetIdx===undefined && req.shiftDate){
+            let clean=(req.shiftDate||'').split(' ')[0].trim();
+            targetIdx=fn.dates.findIndex(d=>d.date===clean || d.iso===clean || d.date===req.shiftDate);
+          }
+          if(targetIdx!==undefined && targetIdx>=0 && targetIdx<staff.shifts.length){
+            if(!staff.originalShifts) staff.originalShifts={};
+            if(!staff.originalShifts[targetIdx]) staff.originalShifts[targetIdx]=staff.shifts[targetIdx];
+            staff.shifts[targetIdx]=req.newShift||'OFF';
+            if((req.newShift||'').toUpperCase()==='AB'){
+              if(!staff.absentApproved) staff.absentApproved={};
+              staff.absentApproved[targetIdx]=true;
+            } else {
+              if(staff.absentApproved) staff.absentApproved[targetIdx]=false;
+            }
+            console.log('Set shift correction for', staff.firstName, 'to', req.newShift);
+          }
+        }
+      });
+    }
+    safeSetJSON('retail_roster_byFortnight_v1',fns);
+    if(!staffMatched){
+      console.warn('Approve: No staff matched for', req.username);
+      toast('Approved but staff not found on roster for '+req.username+' - check name');
+    } else {
+      toast('Approved - '+req.username+' roster updated to AB/OFF - showing APPROVED on My Schedule');
+    }
+    try{ 
+      var state=getAllState();
+      state._ts=Date.now();
+      state._lastApproveId=req.id;
+      state._lastApproveTs=Date.now();
+      if(typeof db!=='undefined' && db && db.ref){
+        db.ref('repco_state').set(state);
+      } else {
+        fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
+      }
+      fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(all),mode:'cors'}).catch(function(){});
+      // Also save roster
+      fetch(FIREBASE_DB_URL+'/retail_roster_byFortnight_v1.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(fns),mode:'cors'}).catch(function(){});
+    }catch(e){ console.error(e); }
+    renderRequests();
+    renderRosterSafe();
+    try{ renderMySchedule(); }catch(e){}
+    applyRoleVisibility();
+  }catch(e){ console.error('approveReq error', e); toast('Error approving: '+e.message); }
 }
 
+
 function denyReq(idx){ 
-  let all=safeGetJSON('retail_roster_requests_v2',[]); 
-  if(!all[idx]) return; 
-  const req=all[idx]; 
-  all[idx].status='denied'; 
-  all[idx].deniedTs=Date.now();
-  all[idx].deniedBy=safeGet('repco_username')||'admin';
-  safeSetJSON('retail_roster_requests_v2',all); 
-  toast('Denied - '+req.username+' notified live - showing DENIED on My Schedule'); 
-  try{ 
-    var state=getAllState();
-    state._ts=Date.now();
-    state._lastDenyId=req.id;
-    if(typeof db!=='undefined' && db && db.ref){
-      db.ref('repco_state').set(state);
-    } else {
-      fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
-    }
-    fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(all),mode:'cors'}).catch(function(){});
-  }catch(e){}
-  renderRequests(); 
-  try{ renderMySchedule(); }catch(e){}
+  try{
+    let all=safeGetJSON('retail_roster_requests_v2',[]); 
+    if(!all[idx]) { toast('Request not found'); return; }
+    const req=all[idx]; 
+    console.log('Denying request', req);
+    all[idx].status='denied'; 
+    all[idx].deniedTs=Date.now();
+    all[idx].deniedBy=safeGet('repco_username')||'admin';
+    safeSetJSON('retail_roster_requests_v2',all); 
+    toast('Denied - '+req.username+' will see DENIED on My Schedule - roster NOT changed'); 
+    try{ 
+      var state=getAllState();
+      state._ts=Date.now();
+      state._lastDenyId=req.id;
+      state._lastDenyTs=Date.now();
+      if(typeof db!=='undefined' && db && db.ref){
+        db.ref('repco_state').set(state);
+      } else {
+        fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
+      }
+      fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(all),mode:'cors'}).catch(function(){});
+    }catch(e){ console.error(e); }
+    renderRequests(); 
+    try{ renderMySchedule(); }catch(e){}
+  }catch(e){ console.error('denyReq error', e); toast('Error denying: '+e.message); }
 }
+
 
 function renderRequestsPage(){
   const container=document.getElementById('requests-list')||document.getElementById('unavail-list');
@@ -4589,7 +4664,7 @@ function renderMySchedule(){
               console.log('IMMEDIATE LIVE: Updated from', source, 're-rendering My Schedule - Daniel will see DENIED');
               try{ renderMySchedule(); }catch(e){}
               try{ renderRequests(); }catch(e){}
-              toast('Live: Request '+source+' denied by admin');
+              toast('Live: Request '+source+' updated by admin - check My Schedule');
             }
           }catch(e){ console.error('overwrite error', e); }
         }
