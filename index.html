@@ -351,7 +351,7 @@ const BUILD_ID="20261022070000_FIX_ALL_V11_FINAL";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
-async function checkForIndexUpdate(isInitial){
+async async function checkForIndexUpdate(isInitial){
   try{
     const url=window.location.href.split("?")[0].split("#")[0];
     const res=await fetch(url+"?_v="+Date.now(),{cache:"no-store"});
@@ -361,9 +361,28 @@ async function checkForIndexUpdate(isInitial){
     const remoteBuild=bm?bm[1]:null;
     const h=computeHashSync(txt);
     if(isInitial){ currentHtmlHash=h; if(remoteBuild) currentBuildId=remoteBuild; return; }
-    if(remoteBuild && remoteBuild!==currentBuildId){ toast("New version - reloading"); setTimeout(()=>location.reload(true),1500); return; }
-    if(currentHtmlHash!==null && h!==currentHtmlHash){ toast("New version - reloading"); setTimeout(()=>location.reload(true),3000); }
-  }catch(e){}
+    if(remoteBuild && remoteBuild!==currentBuildId){
+      // FIXED: Forced logout on updated html refresh - as requested
+      toast("New version detected - logging out and reloading");
+      try{
+        safeSet('repco_username','');
+        safeSet('repco_last_activity','');
+        safeSet('repco_currentRole','');
+        safeSetJSON('retail_roster_session_v1',{});
+      }catch(e){}
+      setTimeout(()=>{ location.reload(true); },1500);
+      return;
+    }
+    if(currentHtmlHash!==null && h!==currentHtmlHash){
+      toast("New version - logging out and reloading");
+      try{
+        safeSet('repco_username','');
+        safeSet('repco_last_activity','');
+        safeSet('repco_currentRole','');
+      }catch(e){}
+      setTimeout(()=>{ location.reload(true); },3000);
+    }
+  }catch(e){ console.error('checkForIndexUpdate', e); }
 }
 
 
@@ -2903,6 +2922,29 @@ function exportPDF(){ let cur=getCurrentFortnight(); if(!cur){ toast('No roster'
 }
 function showCustomConfirm(title, body, cb){ const modal=document.getElementById('custom-modal'); const t=document.getElementById('custom-modal-title'); const b=document.getElementById('custom-modal-body'); const ok=document.getElementById('custom-modal-ok'); const cancel=document.getElementById('custom-modal-cancel'); t.textContent=title; b.innerHTML='<div style="font-size:13px">'+(body||'')+'</div>'; ok.textContent='CONFIRM'; cancel.style.display='block'; cancel.textContent='CANCEL'; modal.classList.add('show'); function cleanup(){ modal.classList.remove('show'); ok.onclick=null; cancel.onclick=null; } ok.onclick=()=>{ cleanup(); cb(true); }; cancel.onclick=()=>{ cleanup(); cb(false); }; }
 function showCustomPrompt(title, bodyHtml, cb){ const modal=document.getElementById('custom-modal'); const t=document.getElementById('custom-modal-title'); const b=document.getElementById('custom-modal-body'); const ok=document.getElementById('custom-modal-ok'); const cancel=document.getElementById('custom-modal-cancel'); t.textContent=title; b.innerHTML=bodyHtml; ok.textContent='SAVE'; cancel.style.display='block'; cancel.textContent='CANCEL'; modal.classList.add('show'); function cleanup(){ modal.classList.remove('show'); ok.onclick=null; cancel.onclick=null; } ok.onclick=()=>{ cleanup(); cb(true); }; cancel.onclick=()=>{ cleanup(); cb(false); }; }
+
+function hideCustomPrompt(){
+  try{
+    var overlay=document.getElementById('custom-prompt-overlay');
+    if(overlay) overlay.style.display='none';
+    var containers=document.querySelectorAll('#custom-prompt-container, .custom-modal, .modal-overlay');
+    for(var i=0;i<containers.length;i++){
+      try{ containers[i].remove(); }catch(e){ try{ containers[i].style.display='none'; }catch(e2){} }
+    }
+  }catch(e){}
+}
+function hideCustomConfirm(){
+  try{
+    var overlay=document.getElementById('custom-confirm-overlay');
+    if(overlay) overlay.style.display='none';
+    var containers=document.querySelectorAll('#custom-confirm-container, .custom-modal');
+    for(var i=0;i<containers.length;i++){
+      try{ containers[i].remove(); }catch(e){ try{ containers[i].style.display='none'; }catch(e2){} }
+    }
+  }catch(e){}
+}
+
+
 function showCustomSelect(title, options, cb){ const modal=document.getElementById('custom-modal'); const t=document.getElementById('custom-modal-title'); const b=document.getElementById('custom-modal-body'); const ok=document.getElementById('custom-modal-ok'); const cancel=document.getElementById('custom-modal-cancel'); t.textContent=title; let html='<div style="display:flex;flex-direction:column;gap:8px">'; options.forEach((o,i)=>{ html+='<button data-idx="'+i+'" class="card" style="text-align:left;font-weight:900;padding:12px">'+o+'</button>'; }); html+='</div>'; b.innerHTML=html; ok.style.display='none'; cancel.style.display='block'; cancel.textContent='CANCEL'; modal.classList.add('show'); function cleanup(){ modal.classList.remove('show'); ok.style.display='block'; ok.onclick=null; cancel.onclick=null; b.querySelectorAll('button').forEach(btn=>btn.onclick=null); } b.querySelectorAll('button').forEach(btn=>{ btn.onclick=()=>{ let idx=parseInt(btn.getAttribute('data-idx')); cleanup(); cb(options[idx]); }; }); cancel.onclick=()=>{ cleanup(); cb(null); }; }
 
 function isAdminUser(){ let u=(safeGet('repco_username')||'').toLowerCase(); return ['admin','master','manager','administrator'].indexOf(u)>=0; }
@@ -3670,7 +3712,7 @@ function deleteMyRequest(idx){
         }
         reqs.splice(idx,1);
         safeSetJSON('retail_roster_requests_v2', reqs);
-        renderRequests();
+        renderRequests(); try{ renderMySchedule(); }catch(e){} try{ updateRequestsBadge(); }catch(e){} try{ debouncedCloudSave(); cloudSave(); }catch(e){}
         updateRequestsBadge();
         try{ debouncedCloudSave(); }catch(e){}
         toast('Request deleted / undone');
@@ -3818,7 +3860,7 @@ function editMyRequest(idx){
             var modals=document.querySelectorAll('.custom-modal, #custom-prompt-container, .modal-overlay');
             for(var j=0;j<modals.length;j++){ try{ modals[j].remove(); }catch(e){} }
             var overlay=document.getElementById('custom-prompt-overlay'); if(overlay) overlay.style.display='none';
-            renderRequests();
+            renderRequests(); try{ renderMySchedule(); }catch(e){} try{ updateRequestsBadge(); }catch(e){} try{ debouncedCloudSave(); cloudSave(); }catch(e){}
             updateRequestsBadge();
             try{ debouncedCloudSave(); }catch(e){}
             toast('Request updated');
@@ -3913,8 +3955,10 @@ function renderUnavailable(){
 
 
 
+
 function requestShiftCorrectionFromSchedule(idx, dateLabel, oldShift){
   try{
+    if(typeof updateActivity==='function') updateActivity();
     var cur=getSelectedFortnight(); if(!cur) cur=getCurrentFortnight();
     var dateObj=null;
     var fnsAll=safeGetJSON('retail_roster_byFortnight_v1',[]);
@@ -3935,7 +3979,7 @@ function requestShiftCorrectionFromSchedule(idx, dateLabel, oldShift){
     if(!dateObj && cur && cur.dates[idx]) dateObj=cur.dates[idx];
     var shiftLabel=dateObj?dateObj.day+' '+dateObj.date:dateLabel;
     var currentShift=oldShift||'OFF';
-    // Check if already has pending request
+    // Check if already pending
     var reqs=safeGetJSON('retail_roster_requests_v2',[]);
     var myUsername=(safeGet('repco_username')||'').toLowerCase();
     for(var rr=0;rr<reqs.length;rr++){
@@ -3944,51 +3988,53 @@ function requestShiftCorrectionFromSchedule(idx, dateLabel, oldShift){
       if(r.username && r.username.toLowerCase()!==myUsername) continue;
       if(r.status!=='pending') continue;
       if(r.shiftDate===shiftLabel || (dateObj && r.shiftISO===dateObj.iso)){
-        showCustomConfirm('Already Pending', '<div style="font-size:11px">You already have a pending request for '+shiftLabel+':<br><b>'+r.oldShift+' -> '+r.newShift+'</b><br><br>Do you want to edit it?</div>', function(confirmed){
-          if(confirmed){ var idx=reqs.indexOf(r); editMyRequest(idx); }
-        });
+        var reqIdx=reqs.indexOf(r);
+        showCustomConfirm('Already Pending', '<div style="font-size:11px">You already have a pending request for '+shiftLabel+':<br><b>'+r.oldShift+' -> '+r.newShift+'</b><br><br>Do you want to edit it?<br><br><button onclick="hideCustomConfirm(); setTimeout(function(){ editMyRequest('+reqIdx+'); },200)" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px;margin:4px">EDIT EXISTING</button> <button onclick="hideCustomConfirm(); setTimeout(function(){ deleteMyRequest('+reqIdx+'); },200)" style="background:#E30613;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px;margin:4px">CANCEL EXISTING</button></div>', function(){ hideCustomConfirm(); });
         return;
       }
     }
-    var html='<div style="font-size:11px">Request change for <b>'+shiftLabel+'</b><br>Current: <b>'+currentShift+'</b><br><br>New shift (e.g., 08:00-16:30, OFF, NA, AB):<br><input id="new-shift-input" placeholder="OFF or 08:00-16:30" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;margin:8px 0;font-size:11px"><br>Reason:<br><input id="new-reason-input" placeholder="Reason for change" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;margin:8px 0;font-size:11px"></div>';
-    showCustomPrompt('Request Shift Change - '+shiftLabel, html, function(){});
+    // Build prompt HTML with inputs that will be read on confirm
+    var html='<div style="font-size:11px"><b>'+shiftLabel+'</b><br>Current: <b>'+currentShift+'</b><br><br>'+
+      'New shift (e.g., 08:00-16:30, OFF, NA):<br>'+
+      '<input id="new-shift-input" placeholder="OFF or 08:00-16:30" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;margin:8px 0;font-size:11px" value="">'+
+      '<br>Reason:<br>'+
+      '<input id="new-reason-input" placeholder="Reason for change" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;margin:8px 0;font-size:11px" value="">'+
+      '</div>';
+    // Use custom confirm with custom buttons
+    showCustomConfirm('Request Shift Change - '+shiftLabel, html, function(confirmed){
+      if(!confirmed) return;
+      var nsEl=document.getElementById('new-shift-input');
+      var rsEl=document.getElementById('new-reason-input');
+      var ns=nsEl?nsEl.value.trim():'';
+      var rs=rsEl?rsEl.value.trim():'';
+      if(!ns){ toast('Enter new shift'); setTimeout(function(){ requestShiftCorrectionFromSchedule(idx, dateLabel, oldShift); },300); return; }
+      if(!rs){ toast('Enter reason'); setTimeout(function(){ requestShiftCorrectionFromSchedule(idx, dateLabel, oldShift); },300); return; }
+      var up=ns.toUpperCase();
+      if(up==='UNAVAILABLE' || up==='U') ns='NA';
+      else if(up==='ABSENT' || up==='A') ns='AB';
+      submitShiftCorrectionRequest(idx, shiftLabel, currentShift, ns, rs);
+    });
+    // Change button text after modal shows
     setTimeout(function(){
-      var buttons=document.querySelectorAll('.custom-modal button, #custom-prompt-container button, .modal button');
-      for(var i=0;i<buttons.length;i++){
-        var btn=buttons[i];
-        var txt=btn.textContent.toUpperCase();
-        if(txt.includes('CONFIRM') || txt.includes('OK') || txt.includes('SUBMIT') || txt.includes('SAVE')){
+      var confirmBtns=document.querySelectorAll('#custom-confirm-container button, .custom-modal button');
+      for(var i=0;i<confirmBtns.length;i++){
+        var btn=confirmBtns[i];
+        if(btn.textContent.toUpperCase().includes('CONFIRM') || btn.textContent.toUpperCase()==='OK'){
           btn.textContent='SUBMIT REQUEST';
-          btn.onclick=function(){
-            var ns=document.getElementById('new-shift-input');
-            var rs=document.getElementById('new-reason-input');
-            if(!ns || !ns.value.trim()){ toast('Enter new shift'); return; }
-            if(!rs || !rs.value.trim()){ toast('Enter reason'); return; }
-            var up=ns.value.toUpperCase();
-            var newShift=ns.value.trim();
-            if(up==='UNAVAILABLE' || up==='U' || up==='NA') newShift='NA';
-            else if(up==='ABSENT' || up==='A' || up==='AB') newShift='AB';
-            submitShiftCorrectionRequest(idx, shiftLabel, currentShift, newShift, rs.value.trim());
-            // Close modal
-            if(typeof hideCustomPrompt==='function') hideCustomPrompt();
-            var modals=document.querySelectorAll('.custom-modal, #custom-prompt-container, .modal-overlay');
-            for(var j=0;j<modals.length;j++){ try{ modals[j].remove(); }catch(e){} }
-            var overlay=document.getElementById('custom-prompt-overlay'); if(overlay) overlay.style.display='none';
-          };
+          btn.style.background='#111';
+          btn.style.color='#fff';
         }
-        if(txt.includes('CANCEL') || txt.includes('CLOSE')){
+        if(btn.textContent.toUpperCase().includes('CANCEL')){
           btn.textContent='CANCEL';
-          btn.onclick=function(){
-            if(typeof hideCustomPrompt==='function') hideCustomPrompt();
-            var modals=document.querySelectorAll('.custom-modal, #custom-prompt-container, .modal-overlay');
-            for(var j=0;j<modals.length;j++){ try{ modals[j].remove(); }catch(e){} }
-            var overlay=document.getElementById('custom-prompt-overlay'); if(overlay) overlay.style.display='none';
-          };
         }
       }
-    },150);
+      // Focus first input
+      var input=document.getElementById('new-shift-input');
+      if(input) input.focus();
+    },100);
   }catch(e){ toast('Error: '+e.message); console.error(e); }
 }
+
 function submitShiftCorrectionRequest(idx, dateLabel, oldShift, newShift, reason){
   try{
     var username = safeGet('repco_username')||'';
