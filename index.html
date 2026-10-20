@@ -580,7 +580,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022480000_FIX_DENIED_NO_FILTER_V52";
+const BUILD_ID="20261022490000_MANUAL_SYNC_V53";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -4684,7 +4684,24 @@ function renderMySchedule(){
     })();
 
     if(typeof updateActivity==='function') updateActivity();
+    // Manual sync UI for when Firebase fails
+    try{
+      var syncBtnHtml='<div class="card" style="background:#111;color:#fff;padding:8px;display:flex;gap:6px;align-items:center"><button onclick="manualSyncDenied()" style="background:#E30613;color:#fff;border:none;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">SYNC NOW - CHECK FOR DENIED</button><button onclick="forceMarkAllPendingAsDenied()" style="background:#fff;color:#111;border:2px solid #111;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">FORCE: MARK PENDING AS DENIED (TEST)</button><span style="font-size:9px;opacity:0.7">If admin denied but you still see pending, tap SYNC NOW</span></div>';
+      var existingSync=document.getElementById('manual-sync-card');
+      if(!existingSync){
+        var mount=document.getElementById('roster-mount')||document.body;
+        var div=document.createElement('div');
+        div.id='manual-sync-card';
+        div.innerHTML=syncBtnHtml;
+        var firstCard=document.querySelector('.card');
+        if(firstCard && firstCard.parentNode){
+          firstCard.parentNode.insertBefore(div, firstCard);
+        }
+      }
+    }catch(e){}
+
     var el=document.getElementById('mysched-list');
+
     if(!el) return;
     var todayISO=getISO();
     var dd=String(new Date(todayISO).getDate()).padStart(2,'0'); var mm=String(new Date(todayISO).getMonth()+1).padStart(2,'0'); var todayStr=dd+'/'+mm;
@@ -4930,6 +4947,124 @@ function renderMySchedule(){
     if(el) el.innerHTML='<div class="card">Error: '+e.message+'</div>';
   }
 }
+
+function manualSyncDenied(){
+  console.log('MANUAL SYNC: Starting');
+  toast('Syncing - checking Firebase for denied requests...');
+  (async function(){
+    try{
+      var myUser=(safeGet('repco_username')||'').toLowerCase();
+      console.log('MANUAL SYNC: myUser', myUser);
+      var localReqs=safeGetJSON('retail_roster_requests_v2',[]);
+      console.log('MANUAL SYNC: Local count', localReqs.length, localReqs.map(function(r){ return r.id+':'+r.status; }));
+      
+      // Try all Firebase paths
+      var paths=[
+        FIREBASE_DB_URL+'/denied_requests.json',
+        FIREBASE_DB_URL+'/retail_roster_requests_v2.json',
+        FIREBASE_DB_URL+'/repco_state.json'
+      ];
+      for(var p=0;p<paths.length;p++){
+        try{
+          var url=paths[p]+'?_t='+Date.now();
+          console.log('MANUAL SYNC: Fetching', url);
+          var r=await fetch(url,{cache:'no-store', mode:'cors'});
+          console.log('MANUAL SYNC: Fetch', paths[p], r.ok, r.status);
+          if(!r.ok) continue;
+          var data=await r.json();
+          var cloudReqs=[];
+          if(paths[p].indexOf('denied_requests.json')!==-1){
+            if(data){
+              for(var key in data){ if(data[key] && data[key].id) cloudReqs.push(data[key]); }
+            }
+          } else if(paths[p].indexOf('retail_roster_requests_v2.json')!==-1){
+            cloudReqs=data;
+          } else if(paths[p].indexOf('repco_state.json')!==-1){
+            if(data && data['retail_roster_requests_v2']){
+              cloudReqs=JSON.parse(data['retail_roster_requests_v2']);
+            }
+          }
+          console.log('MANUAL SYNC: Cloud reqs from', paths[p], Array.isArray(cloudReqs) ? cloudReqs.length : 'not array');
+          if(!Array.isArray(cloudReqs)) continue;
+          var hasUpdate=false;
+          for(var i=0;i<cloudReqs.length;i++){
+            var cr=cloudReqs[i];
+            if(!cr || !cr.id) continue;
+            var idx=localReqs.findIndex(function(lr){ return lr.id===cr.id; });
+            if(idx!==-1){
+              var lr=localReqs[idx];
+              if(lr.status==='pending' && (cr.status==='denied'||cr.status==='rejected'||cr.status==='approved')){
+                console.log('MANUAL SYNC: Updating', cr.id, 'from', lr.status, 'to', cr.status);
+                localReqs[idx]=cr;
+                hasUpdate=true;
+              }
+            }
+          }
+          if(hasUpdate){
+            safeSetJSON('retail_roster_requests_v2', localReqs);
+            console.log('MANUAL SYNC: Updated, re-rendering');
+            toast('SYNCED - Found denied, updating');
+            setTimeout(function(){ renderMySchedule(); },200);
+            return;
+          }
+        }catch(e){ console.error('MANUAL SYNC path error', paths[p], e); }
+      }
+      // If no update from Firebase, check localStorage denied list
+      try{
+        var allDenied=safeGetJSON('repco_all_denied_v1',[]);
+        console.log('MANUAL SYNC: Checking local denied list', allDenied.length);
+        var hasUpdate=false;
+        for(var i=0;i<allDenied.length;i++){
+          var d=allDenied[i];
+          if(!d || !d.id) continue;
+          var idx=localReqs.findIndex(function(lr){ return lr.id===d.id; });
+          if(idx!==-1 && localReqs[idx].status==='pending'){
+            localReqs[idx]=d.request||d;
+            localReqs[idx].status='denied';
+            hasUpdate=true;
+            console.log('MANUAL SYNC: Updated from local denied list', d.id);
+          }
+        }
+        if(hasUpdate){
+          safeSetJSON('retail_roster_requests_v2', localReqs);
+          toast('SYNCED from local list');
+          setTimeout(function(){ renderMySchedule(); },200);
+          return;
+        }
+      }catch(e){}
+      
+      toast('No denied found in Firebase - Firebase may block writes. Check admin console for DENY VERIFY logs');
+      console.log('MANUAL SYNC: No updates found, current local still', localReqs.map(function(r){ return r.id+':'+r.status; }));
+    }catch(e){ console.error('MANUAL SYNC error', e); toast('Sync error: '+e.message); }
+  })();
+}
+
+function forceMarkAllPendingAsDenied(){
+  if(!confirm('TEST: Force mark ALL your pending requests as DENIED? This is for testing when Firebase fails.')) return;
+  try{
+    var localReqs=safeGetJSON('retail_roster_requests_v2',[]);
+    var myUser=(safeGet('repco_username')||'').toLowerCase();
+    var count=0;
+    for(var i=0;i<localReqs.length;i++){
+      var r=localReqs[i];
+      if(r.status==='pending' && (!myUser || r.username.toLowerCase()===myUser || myUser==='admin' || myUser==='')){
+        r.status='denied';
+        r.deniedBy='admin (forced)';
+        r.deniedTs=Date.now();
+        count++;
+      }
+    }
+    if(count>0){
+      safeSetJSON('retail_roster_requests_v2', localReqs);
+      toast('Forced '+count+' pending to DENIED - re-rendering');
+      setTimeout(function(){ renderMySchedule(); },200);
+    } else {
+      toast('No pending found for user '+myUser);
+    }
+  }catch(e){ console.error(e); }
+}
+
+
 
 
 
