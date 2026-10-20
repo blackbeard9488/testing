@@ -786,6 +786,8 @@ function renderRosterSafe(){
 
 function editStaffType(globalIdx){ if(!isManagerRole()) return; showCustomSelect('Set employment type for '+getCurrentFortnight().staff[globalIdx].firstName+' '+getCurrentFortnight().staff[globalIdx].lastName, ['Full time','Casual'], (choice)=>{ if(!choice) return; let norm=choice.toLowerCase().includes('casual')?'casual':'fulltime'; let fns=safeGetJSON('retail_roster_byFortnight_v1',[]); let fn=fns.find(f=>f.id===safeGet('retail_roster_currentFortnightId')); if(fn){ fn.staff[globalIdx].employmentType=norm; safeSetJSON('retail_roster_byFortnight_v1',fns); } toast(fn.staff[globalIdx].firstName+' set to '+norm+' - synced'); renderRosterSafe(); applyRoleVisibility(); }); }
 
+
+
 function editCell(el,rowIdx,colIdx,sectionTitle){
   try{
     if(!isManagerRole(getActualRole())){ toast('Manager only'); return; }
@@ -794,6 +796,8 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
     if(!cur) return;
     var staff=cur.staff[rowIdx];
     if(!staff) return;
+    
+    // Check for approved AB request FIRST - show popup window ONLY for approved requests (as per logic)
     var hasApprovedAbsent=false;
     var approvedReq=null;
     try{
@@ -814,7 +818,9 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
         hasApprovedAbsent=true;
       }
     }catch(e){}
+    
     if(hasApprovedAbsent){
+      // Show popup window ONLY for approved AB requests (per logic defined)
       showCustomConfirm('Approved Absent Request', '<div style="font-size:11px">This shift was approved as ABSENT (AB) for '+staff.firstName+' '+staff.lastName+' on '+(approvedReq?approvedReq.shiftDate:cur.dates[colIdx].date)+' '+cur.dates[colIdx].day+'<br><br>Reason: '+(approvedReq && approvedReq.reason ? approvedReq.reason : 'AB approved')+'<br><br>Do you want to override and remove AB status?</div>', function(confirmed){
         if(!confirmed) return;
         try{
@@ -840,59 +846,118 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
             }
             safeSetJSON('retail_roster_requests_v2',all);
           }
+          try{ debouncedCloudSave(); }catch(e){}
         }catch(e){ console.error(e); toast('Error: '+e.message); }
       });
       return;
     }
+    
+    // Normal edit - in cell and confirmed by pressing enter or clicking off cell, NOT via window
+    if(el.querySelector('input')) return;
+    
     var current=staff.shifts[colIdx]||'OFF';
-    var draft=getEditDraft();
-    var initialValue=current;
-    if(draft && draft.rowIdx===rowIdx && draft.colIdx===colIdx && (Date.now()-draft.ts)<24*60*60*1000){
-      initialValue=draft.value;
+    
+    var input=document.createElement('input');
+    input.type='text';
+    input.value=current.toUpperCase()==='OFF'?'':current;
+    input.placeholder='G=green, AB=absent, OFF, HH:MM-HH:MM';
+    input.style.cssText='width:100%;height:100%;min-height:28px;border:2px solid #111;border-radius:6px;padding:4px 2px;font-size:11px;font-weight:900;text-align:center;background:#FFFBCC;outline:none;box-sizing:border-box';
+    
+    el.innerHTML='';
+    el.appendChild(input);
+    input.focus();
+    input.select();
+    
+    function saveEdit(){
+      try{
+        var newVal=input.value.trim();
+        if(!newVal) newVal='OFF';
+        var up=newVal.toUpperCase();
+        
+        if(!staff.originalShifts) staff.originalShifts={};
+        if(!staff.cellGreen) staff.cellGreen={};
+        if(!staff.absentApproved) staff.absentApproved={};
+        if(!staff.unavailable) staff.unavailable=Array(cur.dates.length).fill(false);
+        
+        if(staff.originalShifts[colIdx]===undefined || staff.originalShifts[colIdx]===null){
+          staff.originalShifts[colIdx]=staff.shifts[colIdx];
+        }
+        
+        if(up==='G'){
+          staff.cellGreen[colIdx]=!staff.cellGreen[colIdx];
+          if(staff.shifts[colIdx]==='OFF' || staff.shifts[colIdx]===''){
+            staff.shifts[colIdx]=staff.originalShifts[colIdx]||'OFF';
+          }
+          toast((staff.cellGreen[colIdx]?'Green ON':'Green OFF')+' for '+staff.firstName+' '+staff.lastName);
+        } else if(up==='AB' || up==='ABSENT'){
+          staff.absentApproved[colIdx]=true;
+          staff.cellGreen[colIdx]=false;
+          staff.unavailable[colIdx]=false;
+          toast('Marked AB for '+staff.firstName+' '+staff.lastName);
+        } else if(up==='NA'){
+          staff.unavailable[colIdx]=true;
+          staff.absentApproved[colIdx]=false;
+          staff.cellGreen[colIdx]=false;
+          staff.shifts[colIdx]='OFF';
+        } else if(up==='OFF' || up===''){
+          staff.shifts[colIdx]='OFF';
+          staff.absentApproved[colIdx]=false;
+          staff.unavailable[colIdx]=false;
+          staff.cellGreen[colIdx]=false;
+        } else {
+          staff.shifts[colIdx]=newVal;
+          staff.absentApproved[colIdx]=false;
+          staff.unavailable[colIdx]=false;
+        }
+        
+        var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+        safeSetJSON('retail_roster_byFortnight_v1',fns);
+        saveEditDraft(rowIdx, colIdx, newVal, staff.firstName+' '+staff.lastName, cur.dates[colIdx].day+' '+cur.dates[colIdx].date);
+        clearEditDraft();
+        if(typeof updateActivity==='function') updateActivity();
+        renderRosterSafe();
+        toast('Updated: '+newVal);
+        try{ debouncedCloudSave(); }catch(e){}
+      }catch(e){
+        console.error(e);
+        toast('Error: '+e.message);
+        renderRosterSafe();
+      }
     }
-    showCustomPrompt('Edit Shift', '<div style="font-size:11px">Edit shift for '+staff.firstName+' '+staff.lastName+' on '+cur.dates[colIdx].day+' '+cur.dates[colIdx].date+'<br>Current: '+current+(initialValue!==current?' <br><b style="color:#E30613">Unsaved draft: '+initialValue+'</b>':'')+'</div><input id="edit-shift-input" value="'+initialValue.replace(/"/g,'&quot;')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;margin-top:8px"><div style="font-size:9px;color:#666;margin-top:6px">Auto-saves while typing. If timed out or refreshed, draft is restored.</div>', function(val){
-      if(val===null){ return; }
-      var newVal=val.trim();
-      if(!newVal) newVal='OFF';
-      if(!staff.originalShifts) staff.originalShifts=[];
-      if(!staff.originalShifts[colIdx]) staff.originalShifts[colIdx]=staff.shifts[colIdx];
-      staff.shifts[colIdx]=newVal;
-      if(newVal.toUpperCase()==='AB' || newVal.toUpperCase()==='ABSENT'){
-        if(!staff.absentApproved) staff.absentApproved=[];
-        staff.absentApproved[colIdx]=true;
-      } else {
-        if(staff.absentApproved) staff.absentApproved[colIdx]=false;
-      }
-      var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
-      safeSetJSON('retail_roster_byFortnight_v1',fns);
-      clearEditDraft();
-      if(typeof updateActivity==='function') updateActivity();
-      renderRosterSafe();
-      toast('Shift updated: '+newVal+' (auto-saved)');
+    
+    function cancelEdit(){
+      try{
+        clearEditDraft();
+        renderRosterSafe();
+      }catch(e){ renderRosterSafe(); }
+    }
+    
+    input.addEventListener('blur', function(){
+      saveEdit();
     });
-    setTimeout(function(){
-      var inp=document.getElementById('edit-shift-input');
-      if(inp){
-        inp.addEventListener('input', function(){
-          if(typeof updateActivity==='function') updateActivity();
-          var v=inp.value;
-          saveEditDraft(rowIdx, colIdx, v, staff.firstName+' '+staff.lastName, cur.dates[colIdx].day+' '+cur.dates[colIdx].date);
-          if(draftSaveTimeout) clearTimeout(draftSaveTimeout);
-          draftSaveTimeout=setTimeout(function(){
-            var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
-            if(fns) safeSetJSON('retail_roster_backup_autosave_v1', {fns:fns, ts:Date.now(), by:safeGet('repco_username')||'', reason:'typing_autosave'});
-          }, 2000);
-        });
-        saveEditDraft(rowIdx, colIdx, inp.value, staff.firstName+' '+staff.lastName, cur.dates[colIdx].day+' '+cur.dates[colIdx].date);
-        inp.focus();
-        inp.select();
+    
+    input.addEventListener('keydown', function(e){
+      if(e.key==='Enter'){
+        e.preventDefault();
+        saveEdit();
+      } else if(e.key==='Escape'){
+        e.preventDefault();
+        cancelEdit();
       }
-    }, 100);
+    });
+    
+    input.addEventListener('input', function(){
+      if(typeof updateActivity==='function') updateActivity();
+      saveEditDraft(rowIdx, colIdx, input.value, staff.firstName+' '+staff.lastName, cur.dates[colIdx].day+' '+cur.dates[colIdx].date);
+    });
+    
   }catch(e){
-    console.error('editCell error', e);
+    console.error(e);
     toast('Edit error: '+e.message);
   }
 }
+
+
 
 function prevFortnight(){const fns=safeGetJSON('retail_roster_byFortnight_v1',[]);let idx=fns.findIndex(f=>f.id===safeGet('retail_roster_currentFortnightId'));if(idx<=0)idx=fns.length-1;else idx--;safeSet('retail_roster_currentFortnightId',fns[idx].id);populateFortnightSelect();renderRosterSafe(); applyRoleVisibility();}
 function nextFortnight(){const fns=safeGetJSON('retail_roster_byFortnight_v1',[]);let idx=fns.findIndex(f=>f.id===safeGet('retail_roster_currentFortnightId'));if(idx<0||idx>=fns.length-1)idx=0;else idx++;safeSet('retail_roster_currentFortnightId',fns[idx].id);populateFortnightSelect();renderRosterSafe(); applyRoleVisibility();}
