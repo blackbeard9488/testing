@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_INSTANT_V119";
+const BUILD_ID="20261022690000_INSTANT_V120";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -1031,7 +1031,7 @@ async function cloudLoad(){
         applyCloudState(cloudState, false);
       }
     }catch(e){ console.log('Firebase REST poll error', e.message); }
-  },3000);
+  },1000);
 
   // Poll requests_v2 directly for denied/approved that should overwrite pending - DANIEL FIX
   setInterval(async function(){
@@ -1044,11 +1044,11 @@ async function cloudLoad(){
       var hasNewDenied=false;
       for(var ci=0;ci<cloudReqs2.length;ci++){
         var cr=cloudReqs2[ci];
-        if(!cr || (cr.status!=='denied' && cr.status!=='rejected' && cr.status!=='approved')) continue;
+        if(!cr || (cr.status!=='denied' && cr.status!=='rejected' && cr.status!=='approved' && cr.status!=='superseded')) continue;
         var found=localReqs2.find(function(lr){ return lr.id===cr.id; });
-        if(!found || found.status==='pending'){
+        if(!found || found.status==='pending' || found.status!==cr.status){
           hasNewDenied=true;
-          console.log('LIVE SYNC: Found denied via requests_v2 REST', cr.id);
+          console.log('LIVE SYNC: Found updated via requests_v2 REST', cr.id, cr.status);
           break;
         }
       }
@@ -1059,7 +1059,25 @@ async function cloudLoad(){
         applyCloudState(fakeState, false);
       }
     }catch(e){ console.log('requests_v2 REST poll error', e.message); }
-  },3000);
+  },1000);
+
+  // V120: Poll roster directly every 1s for instant My Schedule update
+  setInterval(async function(){
+    try{
+      var rr=await fetch(FIREBASE_DB_URL+'/retail_roster_byFortnight_v1.json?_t='+Date.now(),{cache:'no-store', mode:'cors'});
+      if(!rr.ok) return;
+      var cloudFns=await rr.json();
+      if(!Array.isArray(cloudFns) || cloudFns.length===0) return;
+      var localFns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+      if(JSON.stringify(localFns)!==JSON.stringify(cloudFns)){
+        console.log('LIVE SYNC: Roster changed via direct poll, updating My Schedule');
+        safeSetJSON('retail_roster_byFortnight_v1', cloudFns);
+        try{ renderRosterSafe(); }catch(e){}
+        try{ renderMySchedule(); }catch(e){}
+        try{ updateMyScheduleCard(); }catch(e){}
+      }
+    }catch(e){ console.log('roster direct poll error', e.message); }
+  },1000);
 }
 
 
@@ -2142,9 +2160,13 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
           }catch(e){ console.error('V115 revert approved error', e); }
           
           clearEditDraft();
-          renderRosterSafe();
-          try{ renderMySchedule(); }catch(e){} // V118: Instantly update My Schedule on roster edit
+          // V120: Force instant My Schedule update - multiple times for reliability
+          try{ renderRosterSafe(); }catch(e){}
+          try{ renderMySchedule(); }catch(e){ console.log('V120: Immediate My Schedule render after edit'); }
           try{ updateMyScheduleCard(); }catch(e){}
+          setTimeout(function(){ try{ renderMySchedule(); }catch(e){} }, 100);
+          setTimeout(function(){ try{ renderMySchedule(); }catch(e){} }, 500);
+          setTimeout(function(){ try{ renderMySchedule(); }catch(e){} }, 1000);
           var msg='Saved';
           if(isGreen) msg='Green marked';
           else if(isAB) msg='Marked AB';
@@ -4735,6 +4757,15 @@ function updateTime(){
 
 setInterval(updateTime,1000);
 setInterval(updateMyScheduleCard,60000);
+// V120: Auto-refresh My Schedule every 1s when page is visible for instant roster edits
+setInterval(function(){
+  try{
+    var myschedPage=document.getElementById('mysched-page');
+    if(myschedPage && myschedPage.classList.contains('show')){
+      renderMySchedule();
+    }
+  }catch(e){}
+},1000);
 document.addEventListener('DOMContentLoaded',()=>{
   try{ seedIfEmpty(); enforceOnly8Fulltime(); }catch(e){}
   // Session persistence check
