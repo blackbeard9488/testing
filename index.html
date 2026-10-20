@@ -2,7 +2,7 @@
 <html lang="en">
 <head><link rel="icon" href="data:image/x-icon;,">
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,maximum-scale=5,user-scalable=yes">
 <title>REPCO ROSTER</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -94,6 +94,175 @@ body.maintenance-active{overflow:hidden!important;height:100vh!important;positio
 #hidden-staff-form{max-width:100%;overflow:hidden;box-sizing:border-box;}
 #hs-shifts-grid{max-width:100%;overflow-x:auto;box-sizing:border-box;}
 #hs-shifts-grid input{max-width:100%;box-sizing:border-box;}
+
+/* === MOBILE OPTIMIZATION - Touch-friendly, readable, prevents accidental touches === */
+@media (max-width: 768px){
+  /* Global spacing and font sizes for mobile */
+  body{font-size:16px !important; line-height:1.4 !important;}
+  
+  /* Header - more compact but touch-friendly */
+  #global-header{padding:12px 10px !important; gap:12px !important;}
+  .r-title-consistent{font-size:18px !important;}
+  .r-btns-consistent{flex-wrap:wrap !important; gap:8px !important;}
+  .r-btn-consistent{
+    padding:10px 14px !important; 
+    font-size:12px !important; 
+    min-height:44px !important; 
+    min-width:44px !important;
+    touch-action:manipulation;
+    -webkit-tap-highlight-color:transparent;
+    user-select:none;
+  }
+  
+  /* Page inner padding - more breathing room */
+  .page-inner{padding:12px 10px !important; padding-top:80px !important;}
+  .page-title{font-size:16px !important; margin-bottom:12px !important;}
+  
+  /* Cards - larger touch targets, better readability */
+  .card{
+    padding:14px 12px !important; 
+    margin-bottom:12px !important; 
+    font-size:14px !important;
+    border-radius:12px !important;
+  }
+  
+  /* Buttons in cards - prevent accidental touches */
+  .card button, .card .r-btn-consistent{
+    min-height:48px !important;
+    padding:12px 16px !important;
+    margin:6px 0 !important;
+    font-size:13px !important;
+    touch-action:manipulation;
+  }
+  
+  /* Roster table - horizontal scroll with larger cells */
+  .r-table{font-size:12px !important;}
+  .r-table th, .r-table td{
+    padding:10px 6px !important;
+    min-width:60px !important;
+    font-size:11px !important;
+  }
+  .r-table-container{overflow-x:auto !important; -webkit-overflow-scrolling:touch;}
+  
+  /* Forms - larger inputs for mobile */
+  input, select, textarea{
+    font-size:16px !important; /* Prevents zoom on iOS */
+    min-height:44px !important;
+    padding:12px 14px !important;
+    margin:6px 0 !important;
+  }
+  
+  /* Hidden staff shifts grid - 2 columns on mobile, prevents overflow */
+  #hs-shifts-grid{
+    grid-template-columns:repeat(2, 1fr) !important;
+    gap:10px !important;
+  }
+  #hs-shifts-grid input{
+    font-size:14px !important;
+    padding:12px 10px !important;
+    min-height:48px !important;
+  }
+  
+  /* Public holiday modal - stack vertically on mobile */
+  #ph-staff-select, #ph-shift, #ph-area{
+    font-size:14px !important;
+    min-height:48px !important;
+  }
+  
+  /* My Schedule page - larger, easier to read */
+  .mysched-card{
+    padding:16px !important;
+    margin-bottom:14px !important;
+  }
+  
+  /* Requests page - prevent accidental approve/deny */
+  .request-card{
+    padding:14px !important;
+  }
+  .request-card button{
+    min-height:48px !important;
+    min-width:80px !important;
+    margin:8px 4px !important;
+    font-size:13px !important;
+  }
+  
+  /* Buddies page */
+  .buddy-card{
+    padding:14px !important;
+    font-size:14px !important;
+  }
+  
+  /* Prevent horizontal overflow */
+  *{max-width:100% !important; box-sizing:border-box !important;}
+  html, body{overflow-x:hidden !important;}
+  
+  /* Modal - full width on mobile with safe areas */
+  .modal, [style*="position:fixed"]{
+    padding:12px !important;
+    margin:10px !important;
+  }
+  
+  /* Custom confirm modal */
+  #custom-confirm{
+    width:95% !important;
+    max-width:95% !important;
+    margin:10px auto !important;
+  }
+}
+
+/* Extra small mobile - 480px and below */
+@media (max-width: 480px){
+  .r-btn-consistent{
+    padding:12px 10px !important;
+    font-size:11px !important;
+  }
+  #hs-shifts-grid{
+    grid-template-columns:1fr !important;
+  }
+  .page-inner{padding:10px 8px !important; padding-top:80px !important;}
+  .r-table th, .r-table td{
+    padding:8px 4px !important;
+    font-size:10px !important;
+    min-width:50px !important;
+  }
+}
+
+/* Touch-specific - prevent accidental touches */
+@media (pointer: coarse){
+  button, .r-btn-consistent, input[type="button"], input[type="submit"]{
+    min-height:48px !important;
+    min-width:48px !important;
+    touch-action:manipulation;
+  }
+  /* Increase spacing between interactive elements */
+  button + button, .r-btn-consistent + .r-btn-consistent{
+    margin-left:12px !important;
+  }
+  /* Larger checkboxes and radio */
+  input[type="checkbox"], input[type="radio"]{
+    width:22px !important;
+    height:22px !important;
+  }
+}
+
+/* Prevent double-tap zoom on buttons */
+button, .r-btn-consistent{
+  touch-action:manipulation;
+  -webkit-user-select:none;
+  user-select:none;
+}
+
+/* Better readability for mobile */
+@media (max-width: 768px){
+  /* Increase line height for readability */
+  p, div, span, label{
+    line-height:1.5 !important;
+  }
+  /* Make important info bolder and larger */
+  b, strong, [style*="font-weight:900"]{
+    font-weight:900 !important;
+  }
+}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js">
 function openAdmin(){ const m=document.getElementById("admin-modal"); if(m){ m.classList.add("show"); m.style.display="flex"; } }
@@ -361,7 +530,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022350000_HIDDEN_IN_PH_V39";
+const BUILD_ID="20261022370000_FIX_DANIEL_DENIED_V41";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -579,6 +748,48 @@ function applyCloudState(state,isInitial){
         for(var ri=0;ri<toRemove.length;ri++){
           merged.splice(toRemove[ri],1);
         }
+        
+        // AGGRESSIVE: If cloud has denied/approved, remove any pending for same user+date that would cause PENDING to show instead of DENIED
+        var actionedDates={};
+        for(var ad=0;ad<merged.length;ad++){
+          var ar=merged[ad];
+          if(!ar) continue;
+          if(ar.status==='denied'||ar.status==='rejected'||ar.status==='approved'){
+            var aKey=(ar.username||'').toLowerCase()+'|'+(ar.shiftDate||'')+'|'+(ar.shiftISO||'')+'|'+(ar.shiftIdx!==undefined?ar.shiftIdx:'');
+            // Also add date-only keys for robust matching
+            var dateOnly='';
+            if(ar.shiftDate){
+              var m=ar.shiftDate.match(/(\d{1,2}\/\d{1,2})/);
+              if(m) dateOnly=m[1];
+            }
+            if(dateOnly){
+              actionedDates[(ar.username||'').toLowerCase()+'|date|'+dateOnly]=true;
+            }
+            actionedDates[aKey]=true;
+          }
+        }
+        // Remove pending that have matching actioned date
+        var filteredMerged=[];
+        for(var fm=0;fm<merged.length;fm++){
+          var fr=merged[fm];
+          if(!fr) continue;
+          if(fr.status==='pending'){
+            var pKey=(fr.username||'').toLowerCase()+'|'+(fr.shiftDate||'')+'|'+(fr.shiftISO||'')+'|'+(fr.shiftIdx!==undefined?fr.shiftIdx:'');
+            var pDateOnly='';
+            if(fr.shiftDate){
+              var pm=fr.shiftDate.match(/(\d{1,2}\/\d{1,2})/);
+              if(pm) pDateOnly=pm[1];
+            }
+            var pDateKey=(fr.username||'').toLowerCase()+'|date|'+pDateOnly;
+            if(actionedDates[pKey] || (pDateOnly && actionedDates[pDateKey])){
+              console.log('Removing stale pending (actioned exists):', fr.id, fr.shiftDate, 'because denied/approved exists');
+              changed=true;
+              continue; // Skip this pending - actioned version exists
+            }
+          }
+          filteredMerged.push(fr);
+        }
+        merged=filteredMerged;
         
         // Remove duplicates and ensure we keep actioned versions
         var finalMerged=[];
