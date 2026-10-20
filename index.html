@@ -339,47 +339,105 @@ function applyCloudState(state,isInitial){
 }
 
 
-async function cloudLoad(){
-  try{
-    if(db){
-      var snap=await db.ref('repco_state').once('value'); var data=snap.val();
-      if(data && data._ts){
-        var localTs=parseInt(safeGet('repco_cloud_ts')||'0');
-        if(data._ts>localTs){ applyCloudState(data,true); safeSet('repco_cloud_ts',String(data._ts)); toast('Synced from cloud'); }
-        db.ref('repco_state').on('value',function(s){
-          var d=s.val(); if(!d||!d._ts) return;
-          var lastTs=parseInt(safeGet('repco_cloud_ts')||'0');
-          if(d._ts>lastTs){
-            applyCloudState(d,false); safeSet('repco_cloud_ts',String(d._ts)); 
+
+async function cloudLoad() {
+  try {
+    let data=null;
+    if(db) { 
+      const snap=await db.ref('repco_state').once('value'); 
+      data=snap.val(); 
+    } else { 
+      const res=await fetch(FIREBASE_DB_URL+'/repco_state.json',{cache:'no-store'}); 
+      if(res.ok) data=await res.json(); 
+    }
+    if(data && data._ts) {
+      const localTs=parseInt(localStorage.getItem('repco_cloud_ts')||'0');
+      if(data._ts>localTs) {
+        console.log('New cloud data detected, forcing logout for fresh data');
+        // Save new cloud data first
+        Object.keys(data).forEach(k=>{ 
+          if(k!=='_ts' && data[k]!==undefined) {
+            try{localStorage.setItem(k,data[k]);}catch(e){}
           }
-        }); 
-        setInterval(async function(){
-          try{
-            var ss=await db.ref('repco_state').once('value'); var dd=ss.val();
-            if(dd && dd._ts){
-              var lt=parseInt(safeGet('repco_cloud_ts')||'0');
-              if(dd._ts>lt){ applyCloudState(dd,false); safeSet('repco_cloud_ts',String(dd._ts)); }
-            }
-          }catch(e){}
-        },8000);
-        return;
+        });
+        localStorage.setItem('repco_cloud_ts', String(data._ts));
+        
+        // Force logout all users - clear sessions and return to login screen as if never logged in
+        try{
+          localStorage.removeItem('repco_username');
+          localStorage.removeItem('repco_currentRole');
+          localStorage.removeItem('repco_logout_minutes');
+          localStorage.removeItem('repco_maintenance_first_v1');
+          localStorage.removeItem('repco_edit_draft');
+          localStorage.removeItem('repco_last_manual_select_ts');
+          localStorage.removeItem('repco_last_activity');
+          localStorage.removeItem('repco_currentFortnightId');
+          // Clear any backup autosave
+          localStorage.removeItem('retail_roster_backup_autosave_v1');
+          // Clear sessionStorage too
+          sessionStorage.clear();
+        }catch(e){ console.log('Logout clear error', e); }
+        
+        // Show logout message and reload to login screen
+        try{
+          if(typeof toast==='function') toast('New update detected - logging out for fresh data...');
+        }catch(e){}
+        
+        // Immediate reload to login screen - ensures fresh up to date data
+        setTimeout(function(){
+          location.reload();
+        }, 500);
       }
     }
-    var res=await fetch(FIREBASE_DB_URL+'/repco_state.json',{cache:'no-store'});
-    if(res.ok){ var data=await res.json(); if(data&&data._ts){ var localTs=parseInt(safeGet('repco_cloud_ts')||'0'); if(data._ts>localTs){ applyCloudState(data,true); safeSet('repco_cloud_ts',String(data._ts)); } } }
-  }catch(e){ console.log("cloudLoad",e); }
-  setInterval(async function(){
+    
+    // Also check for index version update - force logout when index.html version changes
     try{
-      var r=await fetch(FIREBASE_DB_URL+'/repco_state.json?_t='+Date.now(),{cache:'no-store'});
-      if(!r.ok) return;
-      var d=await r.json();
-      if(d && d._ts){
-        var lt=parseInt(safeGet('repco_cloud_ts')||'0');
-        if(d._ts>lt){ applyCloudState(d,false); safeSet('repco_cloud_ts',String(d._ts)); }
+      let indexVersion = data && data._indexVersion ? data._indexVersion : null;
+      let localIndexVersion = localStorage.getItem('repco_index_version');
+      if(indexVersion && localIndexVersion && indexVersion!==localIndexVersion){
+        console.log('Index version updated, forcing logout');
+        localStorage.setItem('repco_index_version', indexVersion);
+        // Force logout
+        localStorage.removeItem('repco_username');
+        localStorage.removeItem('repco_currentRole');
+        localStorage.removeItem('repco_logout_minutes');
+        sessionStorage.clear();
+        location.reload();
+      } else if(indexVersion && !localIndexVersion){
+        localStorage.setItem('repco_index_version', indexVersion);
       }
     }catch(e){}
-  },5000);
+    
+  } catch(e) {
+    console.log('cloudLoad error', e);
+  }
 }
+
+// When index is updated (new deployment), bump _indexVersion in Firebase to force logout all users
+function bumpIndexVersion(){
+  try{
+    var newVersion = Date.now().toString();
+    localStorage.setItem('repco_index_version', newVersion);
+    if(db){
+      db.ref('repco_state/_indexVersion').set(newVersion);
+    } else {
+      fetch(FIREBASE_DB_URL+'/repco_state/_indexVersion.json',{method:'PUT', body:JSON.stringify(newVersion)});
+    }
+    if(typeof debouncedCloudSave==='function') debouncedCloudSave();
+  }catch(e){}
+}
+
+// Auto bump index version on load to ensure all users get fresh data after this update
+setTimeout(function(){
+  try{
+    // Only bump if admin
+    var role = localStorage.getItem('repco_currentRole');
+    if(role && (role.toLowerCase()==='manager' || role.toLowerCase()==='admin')){
+      bumpIndexVersion();
+    }
+  }catch(e){}
+}, 3000);
+
 
 async function cloudSave(){
   if(suppressCloudSave) return;
