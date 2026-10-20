@@ -687,6 +687,7 @@ function initApp(){populateFortnightSelect();renderRosterSafe(); applyRoleVisibi
 
 
 
+
 function populateFortnightSelect(){
   var sel=document.getElementById('fortnight-select');
   if(!sel) return;
@@ -707,20 +708,31 @@ function populateFortnightSelect(){
   var storedId=safeGet('retail_roster_currentFortnightId');
   var lastManualTs=safeGet('repco_last_manual_select_ts');
   var now=Date.now();
+  var cur=getCurrentFortnight();
   var curId;
-  if(storedId && sorted.find(function(f){ return f.id===storedId; })){
-    if(lastManualTs && (now-parseInt(lastManualTs,10))<60*60*1000){
-      curId=storedId;
-    } else {
-      var cur=getCurrentFortnight();
-      if(cur && lastManualTs && (now-parseInt(lastManualTs,10))<5*60*1000){
-        curId=storedId;
-      } else {
-        curId=cur?cur.id:storedId||sorted[0].id;
+  var forceCurrent=false;
+  if(cur && storedId){
+    var storedFn=sorted.find(function(f){ return f.id===storedId; });
+    if(storedFn && storedFn.dates && storedFn.dates[0]){
+      var todayISO=getISO();
+      if(cur.dates && cur.dates[0] && todayISO >= cur.dates[0].iso && todayISO <= cur.dates[cur.dates.length-1].iso){
+        if(storedFn.dates[0].iso > todayISO){
+          if(!lastManualTs || (now-parseInt(lastManualTs,10))>2*60*1000){
+            forceCurrent=true;
+          }
+        }
       }
     }
+  }
+  if(forceCurrent && cur){
+    curId=cur.id;
+  } else if(storedId && sorted.find(function(f){ return f.id===storedId; })){
+    if(lastManualTs && (now-parseInt(lastManualTs,10))<2*60*1000){
+      curId=storedId;
+    } else {
+      curId=cur?cur.id:storedId||sorted[0].id;
+    }
   } else {
-    var cur=getCurrentFortnight();
     curId=cur?cur.id:(storedId||sorted[0].id);
   }
   sel.value=curId;
@@ -735,6 +747,7 @@ function populateFortnightSelect(){
     toast('Switched to '+ (fn?fn.label:sel.value));
   };
 }
+
 
 
 
@@ -757,6 +770,7 @@ function enforceOnly8Fulltime(){
 
 
 
+
 function getCurrentFortnight(){
   var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
   if(!fns || fns.length===0) return null;
@@ -768,14 +782,17 @@ function getCurrentFortnight(){
     if(!a.dates||!b.dates||!a.dates[0]||!b.dates[0]) return 0;
     return a.dates[0].iso.localeCompare(b.dates[0].iso);
   });
-  // Fix: inclusive end, so 20/10 is still in 07/10-20/10
+  // Today 20/10/2026 should be in 07/10-20/10, not 21/10-03/11
   for(var i=0;i<sorted.length;i++){
     var fn=sorted[i];
     if(!fn.dates) continue;
     var start=fn.dates[0].iso;
     var end=fn.dates[fn.dates.length-1].iso;
-    if(isoTarget>=start && isoTarget<=end) return fn;
+    if(isoTarget>=start && isoTarget<=end){
+      return fn;
+    }
   }
+  // Fallback by date string DD/MM
   var dd=String(targetDate.getDate()).padStart(2,'0'); var mm=String(targetDate.getMonth()+1).padStart(2,'0'); var todayStr=dd+'/'+mm;
   for(var i=0;i<sorted.length;i++){
     var fn=sorted[i];
@@ -787,6 +804,7 @@ function getCurrentFortnight(){
     if(!fn.dates) continue;
     if(fn.dates.find(function(d){ return d.date===todayStr; })) return fn;
   }
+  // If today is after all, return last that ended <= today
   if(sorted.length>0 && isoTarget < sorted[0].dates[0].iso) return sorted[0];
   var best=null;
   for(var i=0;i<sorted.length;i++){
@@ -798,10 +816,19 @@ function getCurrentFortnight(){
     }
   }
   if(best) return best;
-  var curId=safeGet('retail_roster_currentFortnightId')||(fns[0]&&fns[0].id);
-  var found=fns.find(function(f){ return f.id===curId; });
+  // Last fallback - don't use storedId if it's future
+  var curId=safeGet('retail_roster_currentFortnightId');
+  var found=null;
+  if(curId){
+    found=fns.find(function(f){ return f.id===curId; });
+    if(found && found.dates && found.dates[0] && found.dates[0].iso > isoTarget){
+      // Stored is future, ignore it
+      found=null;
+    }
+  }
   return found||sorted[0]||fns[0];
 }
+
 
 function getSelectedFortnight(){
   var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
@@ -1134,29 +1161,69 @@ function nextFortnight(){
 }
 
 function toggleTimeFormat(){const cur=safeGet('timeFormat')||'24h';const nxt=cur==='24h'?'12h':'24h';safeSet('timeFormat',nxt);toast('Time: '+nxt);renderRosterSafe(); applyRoleVisibility();}
+
 function showMain(){
   try{
     if(typeof updateActivity==='function') updateActivity();
     var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
     if(fns.length===0){ toast('No roster'); return; }
     document.querySelectorAll('.full-page').forEach(function(e){ e.classList.remove('show'); });
-    document.getElementById('repco-v65').classList.add('show');
-    document.getElementById('global-header').classList.add('show');
+    var repco=document.getElementById('repco-v65');
+    if(repco) repco.classList.add('show');
+    var header=document.getElementById('global-header');
+    if(header) header.classList.add('show');
     var cur=getCurrentFortnight();
-    if(cur){
-      var sel=document.getElementById('fortnight-select');
-      if(sel && sel.value!==cur.id){
-        var lastSelTs=safeGet('repco_last_manual_select_ts');
-        var now=Date.now();
-        if(!lastSelTs || (now-parseInt(lastSelTs,10))>5*60*1000){
-          sel.value=cur.id;
-          safeSet('retail_roster_currentFortnightId', cur.id);
+    var sel=document.getElementById('fortnight-select');
+    var lastManualTs=safeGet('repco_last_manual_select_ts');
+    var now=Date.now();
+    var storedId=safeGet('retail_roster_currentFortnightId');
+    var forceCurrent=false;
+    if(cur && storedId){
+      var storedFn=fns.find(function(f){ return f.id===storedId; });
+      if(storedFn && storedFn.dates && storedFn.dates[0] && cur.dates && cur.dates[0]){
+        var storedStart=storedFn.dates[0].iso;
+        var curStart=cur.dates[0].iso;
+        // If stored starts after current ends (future fortnight), force current
+        if(storedStart > cur.dates[cur.dates.length-1].iso){
+          forceCurrent=true;
+        }
+        // Also if today is 20/10 and stored is 21/10-03/11, force current
+        var todayISO=getISO();
+        if(todayISO >= cur.dates[0].iso && todayISO <= cur.dates[cur.dates.length-1].iso){
+          // Current contains today, stored is future -> force current unless manual was within last 2 minutes
+          if(storedStart > todayISO){
+            if(!lastManualTs || (now-parseInt(lastManualTs,10))>2*60*1000){
+              forceCurrent=true;
+            }
+          }
         }
       }
     }
+    if(cur){
+      if(sel){
+        var shouldUpdate=false;
+        if(forceCurrent){
+          shouldUpdate=true;
+        } else if(sel.value!==cur.id){
+          var lastSelTs=safeGet('repco_last_manual_select_ts');
+          if(!lastSelTs || (now-parseInt(lastSelTs,10))>5*60*1000){
+            shouldUpdate=true;
+          }
+        }
+        if(shouldUpdate){
+          sel.value=cur.id;
+          safeSet('retail_roster_currentFortnightId', cur.id);
+          toast('Showing current: '+cur.label+' (today '+getISO()+')');
+        }
+      } else if(forceCurrent){
+        safeSet('retail_roster_currentFortnightId', cur.id);
+      }
+    }
     renderRosterSafe();
+    applyRoleVisibility();
   }catch(e){ console.error('showMain', e); }
 }
+
 function openPage(id){document.getElementById('repco-v65').classList.remove('show');document.querySelectorAll('.full-page').forEach(e=>{if(e.id!==id)e.classList.remove('show');}); const el=document.getElementById(id);if(el)el.classList.add('show'); if(id==='options-page') renderOptions(); if(id==='today-workers-page') renderTodayWorkers(); if(id==='requests-page') renderRequests(); if(id==='buddies-today-page-v141') renderBuddies('today'); if(id==='buddies-tomorrow-page-v141') renderBuddies('tomorrow'); if(id==='mysched-page') renderMySchedule(); if(id==='account-page') renderAccountPage(); if(id==='unavail-page') { try{ renderUnavailablePage(); }catch(e){ try{ renderUnavailable(); }catch(e2){} } } if(id==='account-mgmt-page') renderAccountMgmtPage(); if(id==='archive-page') renderArchivePage(); if(id==='import-export-page') renderImportExportPage();}
 function parseDM(str){str=str.trim(); if(!str) return null; let m=str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if(m) return new Date(parseInt(m[3]), parseInt(m[2])-1, parseInt(m[1])); m=str.match(/^(\d{1,2})\/(\d{1,2})$/); if(m){ let y=new Date().getFullYear(); return new Date(y, parseInt(m[2])-1, parseInt(m[1])); } m=str.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m) return new Date(parseInt(m[1]), parseInt(m[2])-1, parseInt(m[3])); return null;}
 function formatDDMM(date){const dd=String(date.getDate()).padStart(2,'0'); const mm=String(date.getMonth()+1).padStart(2,'0'); return dd+'/'+mm;}
