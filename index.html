@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_SYNTAX_3_V92";
+const BUILD_ID="20261022690000_FIX_TORE_V93";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -6185,7 +6185,7 @@ function submitShiftCorrectionRequest(idx, dateLabel, oldShift, newShift, reason
         try{
           pushWithFallback(FIREBASE_DB_URL+'/retail_roster_requests_v2.json', JSON.stringify(reqs), 'requests_v2');
         }catch(e){}
-        // JSONSTORE fallback - works even if Firebase blocks, enables mobile->desktop
+        // JSONS// JSONSTORE fallback removed - Firebase only now
         try{
 
         }catch(e){}
