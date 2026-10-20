@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022700009_FIX_SYNTAX_LOGIN_V133";
+const BUILD_ID="20261022700012_FIX_REFRESH_MENU_LOGOUT_V136";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -662,8 +662,8 @@ async function checkForIndexUpdate(isInitial){
     const h=computeHashSync(txt);
     if(isInitial){ currentHtmlHash=h; if(remoteBuild) currentBuildId=remoteBuild; return; }
     if(remoteBuild && remoteBuild!==currentBuildId){
-      // FIXED: Forced logout on updated html refresh - as requested
-      toast("New version detected - logging out and reloading");
+      console.log('V136: BUILD_ID changed from', currentBuildId, 'to', remoteBuild, '- forcing logout');
+      toast("New version detected ("+remoteBuild+") - logging out and reloading");
       try{
         safeSet('repco_username','');
         safeSet('repco_last_activity','');
@@ -674,13 +674,22 @@ async function checkForIndexUpdate(isInitial){
       return;
     }
     if(currentHtmlHash!==null && h!==currentHtmlHash){
-      toast("New version - logging out and reloading");
+      console.log('V136: Hash changed - forcing logout, old', currentHtmlHash, 'new', h);
+      toast("New version detected - logging out and reloading");
       try{
         safeSet('repco_username','');
         safeSet('repco_last_activity','');
         safeSet('repco_currentRole','');
+        safeSetJSON('retail_roster_session_v1',{});
       }catch(e){}
-      setTimeout(()=>{ location.reload(true); },3000);
+      setTimeout(()=>{ location.reload(true); },1500);
+      return;
+    }
+    // V136: Also check if BUILD_ID missing but hash changed - GitHub Pages CDN may delay BUILD_ID extraction
+    if(currentBuildId && !remoteBuild && currentHtmlHash!==null && h!==currentHtmlHash){
+      console.log('V136: Hash changed but no BUILD_ID found - forcing reload for GitHub Pages');
+      toast("Update detected - reloading");
+      setTimeout(()=>{ location.reload(true); },1500);
     }
   }catch(e){ console.error('checkForIndexUpdate', e); }
 }
@@ -2206,6 +2215,36 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
     }
     doEditCell();
     function doEditCell(){
+      // V134: Close any other open edits first - prevent multiple inputs staying open
+      try{
+        var mount=document.getElementById('roster-mount');
+        if(mount){
+          var openInputs=mount.querySelectorAll('input');
+          for(var oi=0;oi<openInputs.length;oi++){
+            var oInput=openInputs[oi];
+            if(oInput!==el.querySelector('input')){
+              var parent=oInput.parentElement;
+              if(parent && parent!==el){
+                // Trigger blur save for other inputs
+                try{ oInput.dispatchEvent(new Event('blur')); }catch(e){}
+                // Fallback: remove and restore text
+                try{
+                  if(parent.textContent==='') parent.textContent='OFF';
+                  // Don't leave empty
+                }catch(e){}
+              }
+            }
+          }
+          // Force clear any remaining inputs that didn't save
+          var remaining=mount.querySelectorAll('input');
+          for(var ri=0;ri<remaining.length;ri++){
+            var rInput=remaining[ri];
+            if(rInput.parentElement!==el){
+              try{ rInput.parentElement.textContent=rInput.value||'OFF'; }catch(e){}
+            }
+          }
+        }
+      }catch(e){}
       if(el.querySelector('input')) return;
       try{ _rosterEditActive=true; }catch(e){}
       var current=staff.shifts[colIdx]||'OFF';
@@ -2231,6 +2270,14 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
         if(isSaving) return;
         isSaving=true;
         if(draftSaveTimeout) clearTimeout(draftSaveTimeout);
+        // V134: Immediately clear editing flag and remove input to allow renderRosterSafe to proceed
+        try{ _rosterEditActive=false; }catch(e){}
+        try{
+          if(input && input.parentNode){
+            // Temporarily show saving state
+            el.textContent='...';
+          }
+        }catch(e){}
         try{
           var val = saveVal;
           if(typeof val !== 'string'){
@@ -2238,13 +2285,16 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
             else val=String(val);
           }
           var newVal=val.trim();
+          var wasBackspaceRestore=false;
           // If empty / backspaced, restore original shift
           if(!newVal){
+            wasBackspaceRestore=true;
             if(staff.originalShifts && staff.originalShifts[colIdx]){
               newVal=staff.originalShifts[colIdx];
             } else {
               newVal='OFF';
             }
+            console.log('V135: Backspace restore - restoring original', newVal, 'for', staff.firstName, colIdx);
           }
           var up=newVal.toUpperCase();
           var isGreen=false;
@@ -2447,11 +2497,53 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
               }catch(e){}
               toast('Green cleared - '+staff.firstName+' '+dateStr+' now '+actualShift+' as if never requested (superseded '+matchedReqs.length+' request(s))');
               try{ renderMySchedule(); }catch(e){}
+            } else if(wasBackspaceRestore){
+              // V135: Backspace without approved request - still need to clear green flags and restore
+              console.log('V135: Backspace restore without approved - clearing green for', staff.firstName, dateStr);
+              try{
+                if(staff.originalShifts) { try{ delete staff.originalShifts[colIdx]; delete staff.originalShifts[String(colIdx)]; }catch(e){ staff.originalShifts[colIdx]=undefined; } }
+                if(targetStaff && targetStaff.originalShifts) { try{ delete targetStaff.originalShifts[colIdx]; delete targetStaff.originalShifts[String(colIdx)]; }catch(e){ targetStaff.originalShifts[colIdx]=undefined; } }
+                if(staff.cellGreen) staff.cellGreen[colIdx]=false;
+                if(targetStaff && targetStaff.cellGreen) targetStaff.cellGreen[colIdx]=false;
+                if(staff.cellG) staff.cellG[colIdx]=false;
+                if(targetStaff && targetStaff.cellG) targetStaff.cellG[colIdx]=false;
+                if(staff.absentApproved) staff.absentApproved[colIdx]=false;
+                if(targetStaff && targetStaff.absentApproved) targetStaff.absentApproved[colIdx]=false;
+                if(staff.unavailable) staff.unavailable[colIdx]=false;
+                if(targetStaff && targetStaff.unavailable) targetStaff.unavailable[colIdx]=false;
+                var fnsBack=safeGetJSON('retail_roster_byFortnight_v1',[]);
+                var fnIdxBack=fnsBack.findIndex(function(f){return f.id===cur.id;});
+                if(fnIdxBack!==-1 && fnsBack[fnIdxBack].staff && fnsBack[fnIdxBack].staff[rowIdx]){
+                  var sBack=fnsBack[fnIdxBack].staff[rowIdx];
+                  sBack.shifts[colIdx]=actualShift;
+                  if(sBack.originalShifts) { try{ delete sBack.originalShifts[colIdx]; }catch(e){} }
+                  if(sBack.cellGreen) sBack.cellGreen[colIdx]=false;
+                  if(sBack.cellG) sBack.cellG[colIdx]=false;
+                  if(sBack.absentApproved) sBack.absentApproved[colIdx]=false;
+                  if(sBack.unavailable) sBack.unavailable[colIdx]=false;
+                  safeSetJSON('retail_roster_byFortnight_v1', fnsBack);
+                  fns=fnsBack;
+                }
+              }catch(e){ console.log('V135 backspace clear error', e); }
             }
           }catch(e){ console.error('V130 revert error', e); }
           
           try{ _rosterEditActive=false; }catch(e){}
           clearEditDraft();
+          // V134: Ensure input removed before render
+          try{
+            if(input && input.parentNode){
+              input.parentNode.removeChild(input);
+            }
+            // Clean any other stray inputs
+            var mount2=document.getElementById('roster-mount');
+            if(mount2){
+              var stray=mount2.querySelectorAll('input');
+              for(var si=0;si<stray.length;si++){
+                try{ stray[si].parentElement.textContent=stray[si].value||'OFF'; }catch(e){}
+              }
+            }
+          }catch(e){}
           // V120: Force instant My Schedule update - multiple times for reliability
           try{ renderRosterSafe(); }catch(e){}
           try{ renderMySchedule(); }catch(e){ console.log('V120: Immediate My Schedule render after edit'); }
@@ -2494,6 +2586,17 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
                 fetch(FIREBASE_DB_URL+'/retail_roster_byFortnight_v1.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(fns),mode:'no-cors'}).catch(function(){});
               });
             }catch(e){}
+            // V135: Force My Schedule live update on employee devices - push roster + requests and broadcast
+            try{
+              // Push roster separately again with no-cors fallback for reliability
+              setTimeout(function(){
+                try{
+                  fetch(FIREBASE_DB_URL+'/retail_roster_byFortnight_v1.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(fns),mode:'cors'}).catch(function(){
+                    fetch(FIREBASE_DB_URL+'/retail_roster_byFortnight_v1.json',{method:'PUT',body:JSON.stringify(fns),mode:'no-cors'}).catch(function(){});
+                  });
+                }catch(e){}
+              }, 300);
+            }catch(e){}
             // Also debounced as backup
             debouncedCloudSave(); 
           }catch(e){ console.log('V119 instant sync error', e); }
@@ -2510,10 +2613,27 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
         if(draftSaveTimeout) clearTimeout(draftSaveTimeout);
         try{ _rosterEditActive=false; }catch(e){}
         try{
+          if(input && input.parentNode){
+            input.parentNode.removeChild(input);
+          }
           el.textContent=origText;
           el.className=origClass;
-        }catch(e){}
+        }catch(e){
+          try{ el.textContent=origText; el.className=origClass; }catch(e){}
+        }
         try{ clearEditDraft(); }catch(e){}
+        // V134: Force cleanup of any other open inputs
+        try{
+          var mount3=document.getElementById('roster-mount');
+          if(mount3){
+            var stray2=mount3.querySelectorAll('input');
+            for(var si2=0;si2<stray2.length;si2++){
+              try{ 
+                if(stray2[si2]!==input) stray2[si2].parentElement.textContent=stray2[si2].value||'';
+              }catch(e){}
+            }
+          }
+        }catch(e){}
         try{ renderRosterSafe(); }catch(e){}
       }
       // Single clean handlers - Enter saves, Escape cancels
@@ -2692,8 +2812,60 @@ function toggleMobileMenu(){
 
 
 
+function forceRefreshCurrentData(){
+  try{
+    console.log('V136: Force refreshing current data on menu select');
+    // Always check for new index.html version first
+    checkForIndexUpdate(false);
+    // Fetch latest Firebase state
+    fetch(FIREBASE_DB_URL+'/repco_state.json?_t='+Date.now(),{cache:'no-store', mode:'cors'}).then(function(r){ if(!r.ok) throw new Error('state fail'); return r.json(); }).then(function(state){
+      if(state && state._ts){
+        var localTs=parseInt(safeGet('repco_cloud_ts')||'0');
+        if(state._ts>localTs){
+          safeSet('repco_cloud_ts', String(state._ts));
+          applyCloudState(state, false);
+        }
+      }
+    }).catch(function(){});
+    // Fetch roster directly
+    fetch(FIREBASE_DB_URL+'/retail_roster_byFortnight_v1.json?_t='+Date.now(),{cache:'no-store', mode:'cors'}).then(function(r){ if(!r.ok) throw new Error('roster fail'); return r.json(); }).then(function(cloudFns){
+      if(Array.isArray(cloudFns) && cloudFns.length>0){
+        try{ filterDeletedStaffFromCloud(cloudFns); }catch(e){}
+        var localFns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+        if(JSON.stringify(localFns)!==JSON.stringify(cloudFns)){
+          safeSetJSON('retail_roster_byFortnight_v1', cloudFns);
+          try{ deduplicateAllRosters(false); }catch(e){}
+        }
+      }
+    }).catch(function(){});
+    // Fetch requests
+    fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json?_t='+Date.now(),{cache:'no-store', mode:'cors'}).then(function(r){ if(!r.ok) throw new Error('req fail'); return r.json(); }).then(function(cloudReqs){
+      if(Array.isArray(cloudReqs)){
+        var localReqs=safeGetJSON('retail_roster_requests_v2',[]);
+        // Simple merge - if cloud has newer approved/denied/superseded, update local
+        var hasUpdate=false;
+        for(var i=0;i<cloudReqs.length;i++){
+          var cr=cloudReqs[i];
+          if(!cr || !cr.id) continue;
+          var idx=localReqs.findIndex(function(lr){ return lr.id===cr.id; });
+          if(idx===-1){ localReqs.push(cr); hasUpdate=true; }
+          else {
+            var local=localReqs[idx];
+            var cloudTs=cr.ts||cr.approvedTs||cr.deniedTs||cr.supersededTs||0;
+            var localTs=local.ts||local.approvedTs||local.deniedTs||local.supersededTs||0;
+            if(cr.status!==local.status || cloudTs>localTs){ localReqs[idx]=cr; hasUpdate=true; }
+          }
+        }
+        if(hasUpdate){ safeSetJSON('retail_roster_requests_v2', localReqs); }
+      }
+    }).catch(function(){});
+  }catch(e){ console.log('forceRefresh error', e); }
+}
+
 function openPage(id){
   try{ if(typeof updateActivity==='function') updateActivity(); }catch(e){}
+  // V136: Refresh data on every menu select - no manual browser refresh needed
+  try{ forceRefreshCurrentData(); }catch(e){}
   var repco=document.getElementById('repco-v65');
   if(repco){ repco.classList.remove('show'); repco.style.display='none'; }
   document.querySelectorAll('.full-page').forEach(e=>{if(e.id!==id)e.classList.remove('show'); e.style.display='none';});
@@ -2703,7 +2875,6 @@ function openPage(id){
   if(gh){
     gh.style.display='flex';
     gh.classList.add('show');
-    // Calculate header height and push content below it to prevent behind menu bar
     setTimeout(function(){
       var headerHeight=gh.offsetHeight||80;
       var targetEl=document.getElementById(id);
@@ -2712,8 +2883,26 @@ function openPage(id){
       }
     },10);
   }
-  // Close mobile menu when navigating
   try{ var gh=document.getElementById('global-header'); if(gh) gh.classList.remove('mobile-open'); var mt=document.getElementById('mobile-menu-toggle'); if(mt) mt.textContent='☰'; }catch(e){}
+  // V136: Always render with latest data after short delay to allow fetch to apply
+  setTimeout(function(){
+    try{
+      if(id==='options-page') renderOptions();
+      if(id==='today-workers-page') renderTodayWorkers();
+      if(id==='requests-page') renderRequests();
+      if(id==='buddies-today-page-v141') renderBuddies('today');
+      if(id==='buddies-tomorrow-page-v141') renderBuddies('tomorrow');
+      if(id==='mysched-page') renderMySchedule();
+      if(id==='account-page') renderAccountPage();
+      if(id==='hidden-staff-page'){ try{ renderHiddenStaffPage(); }catch(e){ console.error('hidden staff page', e); } }
+      if(id==='public-holiday-page'){ try{ renderPublicHolidayPage(); }catch(e){ console.error('public holiday page', e); } }
+      if(id==='unavail-page') { try{ renderUnavailablePage(); }catch(e){ try{ renderUnavailable(); }catch(e2){} } }
+      if(id==='account-mgmt-page') renderAccountMgmtPage();
+      if(id==='archive-page') renderArchivePage();
+      if(id==='import-export-page') renderImportExportPage();
+    }catch(e){ console.error('openPage render error', e); }
+  }, 200);
+  // Also render immediately for instant feedback
   if(id==='options-page') renderOptions();
   if(id==='today-workers-page') renderTodayWorkers();
   if(id==='requests-page') renderRequests();
@@ -2731,6 +2920,8 @@ function openPage(id){
 function showMain(){
   try{
     if(typeof updateActivity==='function') updateActivity();
+    // V136: Refresh data when going to main roster - no manual refresh needed
+    try{ forceRefreshCurrentData(); }catch(e){}
     var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
     if(fns.length===0){ toast('No roster'); return; }
     document.querySelectorAll('.full-page').forEach(function(e){ e.classList.remove('show'); e.style.display='none'; });
@@ -5177,8 +5368,21 @@ document.addEventListener('DOMContentLoaded',()=>{
   }catch(e){ console.error('Session restore', e); }
   setTimeout(()=>{ cloudLoad(); }, 500);
   setTimeout(()=>{ checkForIndexUpdate(true); }, 1000);
-  setInterval(()=>{ checkForIndexUpdate(false); }, 30000);
+  setInterval(()=>{ checkForIndexUpdate(false); }, 10000); // V136: Every 10s for faster logout on GitHub Pages
   setInterval(()=>{ if(!db) cloudLoad(); }, 20000);
+  // V136: Check for update when tab becomes visible again (user returns to tab)
+  try{
+    document.addEventListener('visibilitychange', function(){
+      if(!document.hidden){
+        console.log('V136: Tab visible - checking for index update');
+        checkForIndexUpdate(false);
+      }
+    });
+    window.addEventListener('focus', function(){
+      console.log('V136: Window focus - checking for index update');
+      checkForIndexUpdate(false);
+    });
+  }catch(e){}
   updateTime(); updateMyScheduleCard();
   let btn=document.getElementById('login-signin-btn'); if(btn) btn.addEventListener('click', doLogin);
   let u=document.getElementById('login-user'); let p=document.getElementById('login-pass');
@@ -5506,6 +5710,7 @@ function renderMySchedule(){
       for(var rri=0;rri<reqs.length;rri++){
         var rrq=reqs[rri];
         if(!rrq) continue;
+        if(rrq.status==='superseded') continue; // V135: Ignore superseded when building date lookup - admin reverted
         if(rrq.username && rrq.username.toLowerCase()!==myUsername) continue;
         var key=(rrq.shiftDate||'')+'|'+(rrq.shiftISO||'')+'|'+(rrq.shiftIdx!==undefined?rrq.shiftIdx:'');
         hasRequestForDate[key]=true;
