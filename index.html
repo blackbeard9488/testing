@@ -90,6 +90,10 @@ body.maintenance-active{overflow:hidden!important;height:100vh!important;positio
 #maintenance-main-v141 .center{margin:auto;min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;box-sizing:border-box;width:100%}
 
 .day-ph{background:#E30613!important;color:#fff!important;border:2px solid #111!important;}
+
+#hidden-staff-form{max-width:100%;overflow:hidden;box-sizing:border-box;}
+#hs-shifts-grid{max-width:100%;overflow-x:auto;box-sizing:border-box;}
+#hs-shifts-grid input{max-width:100%;box-sizing:border-box;}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js">
 function openAdmin(){ const m=document.getElementById("admin-modal"); if(m){ m.classList.add("show"); m.style.display="flex"; } }
@@ -357,7 +361,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022220000_PH_BUDDIES_MY_SCHEDULE_V26";
+const BUILD_ID="20261022260000_FIX_HIDDEN_GRID_REMOVE_BANNER_V30";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -471,23 +475,46 @@ function applyCloudState(state,isInitial){
       if(typeof MEMORY_STORE!=='undefined') MEMORY_STORE[k]=state[k];
     }
   });
-  // Merge requests for cross-device: Daniel mobile -> admin desktop
+  // Merge requests for cross-device: Daniel mobile -> admin desktop - FIXED for live denied/approved sync
   if(state['retail_roster_requests_v2']!==undefined){
     try{
       var cloudReqs=null;
       try{ cloudReqs=JSON.parse(state['retail_roster_requests_v2']); }catch(e){}
       var localReqs=safeGetJSON('retail_roster_requests_v2',[]);
-      if(Array.isArray(cloudReqs) && cloudReqs.length>localReqs.length){
-        try{localStorage.setItem('retail_roster_requests_v2', JSON.stringify(cloudReqs));}catch(e){}
-        if(typeof MEMORY_STORE!=='undefined') MEMORY_STORE['retail_roster_requests_v2']=JSON.stringify(cloudReqs);
-      } else if(Array.isArray(cloudReqs)){
+      if(Array.isArray(cloudReqs)){
         var merged=localReqs.slice();
-        var ids=localReqs.map(function(r){ return r.id; });
-        var added=false;
+        var idToIndex={};
+        for(var li=0;li<merged.length;li++){ if(merged[li] && merged[li].id) idToIndex[merged[li].id]=li; }
+        var changed=false;
         for(var i=0;i<cloudReqs.length;i++){
-          if(ids.indexOf(cloudReqs[i].id)===-1){ merged.push(cloudReqs[i]); added=true; }
+          var cr=cloudReqs[i];
+          if(!cr || !cr.id) continue;
+          var existingIdx=idToIndex[cr.id];
+          if(existingIdx===undefined){
+            merged.push(cr);
+            idToIndex[cr.id]=merged.length-1;
+            changed=true;
+          } else {
+            // Update existing if cloud version is newer or status changed (pending->approved/denied)
+            var local=merged[existingIdx];
+            if(local.status!==cr.status || (cr.approvedTs && cr.approvedTs!==local.approvedTs) || (cr.deniedTs && cr.deniedTs!==local.deniedTs) || cr.readByStaff!==local.readByStaff){
+              merged[existingIdx]=cr;
+              changed=true;
+              console.log('Updated request from cloud:', cr.id, 'status', local.status, '->', cr.status);
+            }
+          }
         }
-        if(added) safeSetJSON('retail_roster_requests_v2', merged);
+        // Also handle case where cloud has fewer but updated statuses - always update if changed
+        if(changed || cloudReqs.length!==localReqs.length){
+          safeSetJSON('retail_roster_requests_v2', merged);
+          try{localStorage.setItem('retail_roster_requests_update_ts', String(Date.now()));}catch(e){}
+          console.log('Requests merged from cloud - live update for employee My Schedule');
+        }
+        // If cloud has more requests, overwrite to ensure consistency
+        if(cloudReqs.length>localReqs.length && !changed){
+          try{localStorage.setItem('retail_roster_requests_v2', JSON.stringify(cloudReqs));}catch(e){}
+          if(typeof MEMORY_STORE!=='undefined') MEMORY_STORE['retail_roster_requests_v2']=JSON.stringify(cloudReqs);
+        }
       }
     }catch(e){ console.log('merge error', e); }
   }
@@ -536,7 +563,8 @@ async function cloudLoad(){
             applyCloudState(d,false); safeSet('repco_cloud_ts',String(d._ts)); 
           }
         }); 
-        setInterval(async function(){
+        setInterval(function(){ try{ var reqs=safeGetJSON('retail_roster_requests_v2',[]); var lastUpdate=safeGet('retail_roster_requests_update_ts'); if(lastUpdate){ renderMySchedule(); } }catch(e){} },3000);
+setInterval(async function(){
           try{
             var ss=await db.ref('repco_state').once('value'); var dd=ss.val();
             if(dd && dd._ts){
@@ -2555,28 +2583,44 @@ function applyPublicHolidaysToAllRosters(){
 function renderPublicHolidayPage(){
   try{
     var el=document.getElementById('public-holiday-inner');
-    if(!el) return;
-    var holidays=getPublicHolidays();
-    var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
-    var cur=getSelectedFortnight(); if(!cur) cur=getCurrentFortnight();
+    if(!el){
+      console.error('public-holiday-inner not found');
+      // Try again after short delay
+      setTimeout(function(){ try{ renderPublicHolidayPage(); }catch(e){} }, 500);
+      return;
+    }
+    var holidays=[];
+    try{ holidays=getPublicHolidays(); }catch(e){ holidays=safeGetJSON('retail_roster_public_holidays_v1',[]); }
+    var fns=[];
+    try{ fns=safeGetJSON('retail_roster_byFortnight_v1',[]); }catch(e){}
+    var cur=null;
+    try{ cur=getSelectedFortnight(); if(!cur) cur=getCurrentFortnight(); }catch(e){}
     var html='';
     html+='<div class="card" style="background:#111;color:#fff;font-weight:900;padding:12px">PUBLIC HOLIDAYS - Create & Manage<br><small style="font-weight:400">Select staff, times and areas for a date. Unlisted staff on that date automatically OFF. Live sync to all devices.</small></div>';
     html+='<div class="card" style="padding:12px"><button onclick="openCreatePublicHolidayModal()" style="background:#E30613;color:#fff;border:none;border-radius:9999px;padding:10px 16px;font-weight:900;width:100%">+ CREATE PUBLIC HOLIDAY</button></div>';
     if(holidays.length===0){
-      html+='<div class="card" style="padding:12px">No public holidays created yet</div>';
+      html+='<div class="card" style="padding:12px">No public holidays created yet<br><small>Click + CREATE to add one. You can create multiple public holidays.</small></div>';
     } else {
       holidays.sort(function(a,b){ return (a.dateISO||'').localeCompare(b.dateISO||''); });
       for(var i=0;i<holidays.length;i++){
         var h=holidays[i];
         if(!h) continue;
         var staffCount=(h.staffAllocations||[]).length;
-        html+='<div class="card" style="padding:12px;border:3px solid #111"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><div><div style="font-weight:900;font-size:14px">'+(h.name||'Public Holiday')+' - '+(h.dateLabel||h.dateISO||'')+'</div><div style="font-size:11px;color:#666">Date: '+(h.dateISO||'')+' ('+(h.dateLabel||'')+') - Staff: '+staffCount+' allocated, others OFF</div><div style="font-size:10px;margin-top:4px">'+(h.staffAllocations||[]).map(function(sa){ return (sa.lastName||'')+', '+(sa.firstName||'')+' - '+(sa.shift||'OFF')+' '+(sa.area?'['+sa.area+']':''); }).join('<br>')+'</div></div><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="editPublicHoliday(\''+h.id+'\')" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">EDIT</button><button onclick="deletePublicHoliday(\''+h.id+'\')" style="background:#E30613;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">DELETE</button></div></div></div>';
+        var staffListHtml='';
+        try{
+          staffListHtml=(h.staffAllocations||[]).map(function(sa){ return (sa.lastName||'')+', '+(sa.firstName||'')+' - '+(sa.shift||'OFF')+' '+(sa.area?'['+sa.area+']':''); }).join('<br>');
+        }catch(e){ staffListHtml='Error loading staff'; }
+        html+='<div class="card" style="padding:12px;border:3px solid #111"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><div><div style="font-weight:900;font-size:14px">'+(h.name||'Public Holiday')+' - '+(h.dateLabel||h.dateISO||'')+'</div><div style="font-size:11px;color:#666">Date: '+(h.dateISO||'')+' ('+(h.dateLabel||'')+') - Staff: '+staffCount+' allocated, others OFF</div><div style="font-size:10px;margin-top:4px">'+staffListHtml+'</div></div><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="editPublicHoliday(\''+h.id+'\')" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">EDIT</button><button onclick="deletePublicHoliday(\''+h.id+'\')" style="background:#E30613;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">DELETE</button></div></div></div>';
       }
     }
-    html+='<div class="card" style="padding:10px;background:#FFF6CC;border:2px solid #111"><b>How it works (LIVE):</b><br><small>1. Create public holiday with date and select staff with times/areas<br>2. Any staff NOT listed for that date automatically marked OFF (original shift saved)<br>3. Changes sync live to all devices via Firebase<br>4. Delete public holiday restores original shifts for all staff on that date</small></div>';
+    html+='<div class="card" style="padding:10px;background:#FFF6CC;border:2px solid #111"><b>How it works (LIVE):</b><br><small>1. Create public holiday with date and select staff with times/areas<br>2. Any staff NOT listed for that date automatically marked OFF (original shift saved)<br>3. Changes sync live to all devices via Firebase<br>4. Delete public holiday restores original shifts for all staff on that date<br>5. Same shift shows on buddies pages, My Schedule shows 🎉 icon for PH date</small></div>';
     html+='<div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:10px 14px;font-weight:900;width:100%">← BACK TO ROSTER</button></div>';
     el.innerHTML=html;
-  }catch(e){ console.error('renderPublicHolidayPage error', e); }
+  }catch(e){
+    console.error('renderPublicHolidayPage error', e);
+    var el2=document.getElementById('public-holiday-inner');
+    if(el2) el2.innerHTML='<div class="card" style="background:#FFEB3B;padding:12px">Error loading public holidays: '+e.message+'<br><button onclick="renderPublicHolidayPage()" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;margin-top:8px">RETRY</button></div>';
+  }
 }
 
 var tempPublicHolidayStaff=[];
@@ -2768,32 +2812,46 @@ window.getPublicHolidayForDate=getPublicHolidayForDate;
 
 function renderHiddenStaffPage(){
   try{
+    console.log('renderHiddenStaffPage called');
     var el=document.getElementById('hs-list');
-    if(!el) return;
-    var hidden=safeGetJSON('retail_roster_hidden_staff_v1',[]);
-    var html='<div class="card" style="background:#111;color:#fff;font-weight:900">HIDDEN STAFF - Admin only on roster, shows in staff buddies if overlapping<br><small>Hidden staff appear only on admin main roster view, but will show in TODAY/TOMORROW buddies if shift overlaps</small></div>';
+    if(!el){
+      console.error('hs-list not found, retrying');
+      setTimeout(function(){ try{ renderHiddenStaffPage(); }catch(e){} }, 500);
+      return;
+    }
+    var hidden=[];
+    try{ hidden=safeGetJSON('retail_roster_hidden_staff_v1',[]); }catch(e){ hidden=[]; }
+    if(!Array.isArray(hidden)) hidden=[];
+    console.log('Hidden staff count:', hidden.length, hidden);
+    var html='<div class="card" style="padding:8px;background:#B6F7C5;border:2px solid #111;font-size:10px">Total hidden staff: '+hidden.length+'</div>';
     if(hidden.length===0){
-      html+='<div class="card" style="padding:10px">No hidden staff</div>';
+      html+='<div class="card" style="padding:10px">No hidden staff - Add one above. Fill First, Last, Username and click ADD HIDDEN STAFF</div>';
     } else {
       hidden.forEach(function(h, idx){
+        if(!h) return;
         var constantBadge=h.constantAcrossRosters ? '<span style="background:#B6F7C5;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px;font-weight:900;margin-left:6px">CONSTANT ACROSS ALL ROSTERS</span>' : '<span style="background:#FFEB3B;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px">THIS ROSTER ONLY</span>';
-        var shiftsDisplay=(h.shifts?h.shifts.slice(0,7).join(', '):'OFF')+(h.shifts && h.shifts.length>7?'...':'');
-        html+='<div class="card" style="padding:10px"><div style="font-weight:900;font-size:11px">'+(h.lastName||'')+', '+(h.firstName||'')+' ('+(h.username||'')+') - '+(h.type||'casual')+' '+constantBadge+'</div><div style="font-size:10px">Shifts: '+shiftsDisplay+'</div><div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap"><button onclick="editHiddenStaff('+idx+')" style="background:#111;color:#fff;border-radius:9999px;padding:4px 8px;font-weight:900;font-size:9px">EDIT</button><button onclick="deleteHiddenStaff('+idx+')" style="background:#E30613;color:#fff;border-radius:9999px;padding:4px 8px;font-weight:900;font-size:9px">DELETE</button></div></div>';
+        var shiftsDisplay='';
+        try{ shiftsDisplay=(h.shifts?h.shifts.slice(0,7).join(', '):'OFF')+(h.shifts && h.shifts.length>7?'...':''); }catch(e){ shiftsDisplay='Error'; }
+        html+='<div class="card" style="padding:10px;border:3px solid #111"><div style="font-weight:900;font-size:11px">'+(h.lastName||'')+', '+(h.firstName||'')+' ('+(h.username||'')+') - '+(h.type||'casual')+' '+constantBadge+'</div><div style="font-size:10px">Shifts: '+shiftsDisplay+'</div><div style="font-size:9px;color:#666">Created: '+(h.createdTs?new Date(h.createdTs).toLocaleString():'')+'</div><div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap"><button onclick="editHiddenStaff('+idx+')" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">EDIT</button><button onclick="deleteHiddenStaff('+idx+')" style="background:#E30613;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">DELETE</button></div></div>';
       });
     }
     el.innerHTML=html;
     var grid=document.getElementById('hs-shifts-grid');
     if(grid){
-      var cur=getSelectedFortnight(); if(!cur) cur=getCurrentFortnight();
-      if(cur){
+      var cur=null;
+      try{ cur=getSelectedFortnight(); if(!cur) cur=getCurrentFortnight(); }catch(e){}
+      if(cur && cur.dates){
         grid.innerHTML='';
         cur.dates.forEach(function(d, i){
           var inp=document.createElement('input');
           inp.id='hs-shift-'+i;
           inp.placeholder=d.day+' '+d.date;
-          inp.style.cssText='padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px';
+          inp.title=d.day+' '+d.date+' ('+(d.iso||'')+')';
+          inp.style.cssText='padding:8px 10px;border-radius:9999px;border:2px solid #111;font-size:11px;min-width:0;box-sizing:border-box;width:100%';
           grid.appendChild(inp);
         });
+      } else {
+        grid.innerHTML='<div style="font-size:10px;color:#666">No roster loaded - shifts will be OFF by default</div>';
       }
     }
     // Add constant checkbox if not exists
@@ -2808,8 +2866,13 @@ function renderHiddenStaffPage(){
         form.appendChild(div);
       }
     }
-  }catch(e){ console.error('renderHiddenStaffPage error', e); }
+  }catch(e){
+    console.error('renderHiddenStaffPage error', e);
+    var el2=document.getElementById('hs-list');
+    if(el2) el2.innerHTML='<div class="card" style="background:#FFEB3B;padding:10px">Error: '+e.message+'<br><button onclick="renderHiddenStaffPage()" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;margin-top:8px">RETRY</button></div>';
+  }
 }
+
 function editHiddenStaff(idx){
   try{
     var hidden=safeGetJSON('retail_roster_hidden_staff_v1',[]);
@@ -2878,90 +2941,158 @@ function deleteHiddenStaff(idx){
 
 function addHiddenStaff(){
   try{
-    var first=(document.getElementById('hs-first')?.value||'').trim();
-    var last=(document.getElementById('hs-last')?.value||'').trim();
-    var user=(document.getElementById('hs-user')?.value||'').trim();
-    var pass=(document.getElementById('hs-pass')?.value||'').trim();
-    var type=(document.getElementById('hs-type')?.value||'casual');
-    var constant=document.getElementById('hs-constant-check')?.checked||false;
-    if(!first || !last || !user){ toast('First, Last, Username required'); return; }
-    var cur=getSelectedFortnight(); if(!cur) cur=getCurrentFortnight();
+    console.log('addHiddenStaff called');
+    var firstEl=document.getElementById('hs-first');
+    var lastEl=document.getElementById('hs-last');
+    var userEl=document.getElementById('hs-user');
+    var passEl=document.getElementById('hs-pass');
+    var typeEl=document.getElementById('hs-type');
+    var first=(firstEl?.value||'').trim();
+    var last=(lastEl?.value||'').trim();
+    var user=(userEl?.value||'').trim();
+    var pass=(passEl?.value||'').trim();
+    var type=(typeEl?.value||'casual');
+    var constantEl=document.getElementById('hs-constant-check');
+    var constant=constantEl?constantEl.checked:false;
+    console.log('Values:', first, last, user, type, constant);
+    if(!first || !last || !user){
+      toast('First, Last, Username required - fill all 3');
+      alert('First, Last, Username required');
+      return;
+    }
+    var cur=null;
+    try{ cur=getSelectedFortnight(); }catch(e){}
+    if(!cur){ try{ cur=getCurrentFortnight(); }catch(e){} }
+    if(!cur){
+      var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+      if(fns && fns.length>0) cur=fns[0];
+    }
     var shifts=[];
-    if(cur){
+    if(cur && cur.dates){
       for(var i=0;i<cur.dates.length;i++){
-        var val=(document.getElementById('hs-shift-'+i)?.value||'').trim();
+        var shiftEl=document.getElementById('hs-shift-'+i);
+        var val=(shiftEl?.value||'').trim();
         shifts.push(val||'OFF');
       }
     } else {
       shifts=Array(14).fill('OFF');
     }
-    var hidden=safeGetJSON('retail_roster_hidden_staff_v1',[]);
-    hidden.push({firstName:first,lastName:last,username:user,password:pass,type:type,shifts:shifts,constantAcrossRosters:constant});
+    console.log('Shifts:', shifts);
+    var hidden=[];
+    try{ hidden=safeGetJSON('retail_roster_hidden_staff_v1',[]); }catch(e){ hidden=[]; }
+    if(!Array.isArray(hidden)) hidden=[];
+    var newEntry={firstName:first,lastName:last,username:user,password:pass,type:type,shifts:shifts,constantAcrossRosters:constant,createdTs:Date.now()};
+    hidden.push(newEntry);
+    console.log('Saving hidden:', hidden);
     safeSetJSON('retail_roster_hidden_staff_v1', hidden);
-    // Always add to current roster for admin main view (was missing - hidden not showing)
-    var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
-    var curId=safeGet('retail_roster_currentFortnightId');
-    var curFn=fns.find(function(f){ return f.id===curId; });
-    if(curFn){
-      if(!curFn.staff) curFn.staff=[];
-      var existingCur=curFn.staff.find(function(s){ return s.username && s.username.toLowerCase()===user.toLowerCase(); });
-      if(!existingCur){
-        curFn.staff.push({firstName:first,lastName:last,username:user,type:type,shifts:shifts,hidden:true,originalShifts:shifts.slice()});
-      } else {
-        existingCur.hidden=true;
-        existingCur.shifts=shifts;
-        existingCur.firstName=first;
-        existingCur.lastName=last;
+    // Verify save
+    var verify=safeGetJSON('retail_roster_hidden_staff_v1',[]);
+    console.log('Verify saved:', verify.length);
+    
+    // Always add to current roster for admin main view
+    try{
+      var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+      var curId=null;
+      try{ curId=safeGet('retail_roster_currentFortnightId'); }catch(e){}
+      var curFn=null;
+      if(curId){
+        curFn=fns.find(function(f){ return f.id===curId; });
       }
-    }
-    safeSetJSON('retail_roster_byFortnight_v1', fns);
-    // If constant, apply to ALL rosters
-    if(constant){
-      fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
-      for(var f=0;f<fns.length;f++){
-        var fn=fns[f];
-        if(!fn.staff) continue;
-        if(fn.id===curId) continue; // Already done
-        var existing=fn.staff.find(function(s){ return s.username && s.username.toLowerCase()===user.toLowerCase(); });
-        if(!existing){
-          var clonedShifts=[];
-          for(var d=0;d<fn.dates.length;d++){
-            var day=fn.dates[d].day;
-            var matchingIdx=-1;
-            for(var od=0;od<cur.dates.length;od++){
-              if(cur.dates[od].day===day){ matchingIdx=od; break; }
-            }
-            if(matchingIdx>=0) clonedShifts.push(shifts[matchingIdx]||'OFF');
-            else clonedShifts.push(shifts[d%shifts.length]||'OFF');
-          }
-          fn.staff.push({firstName:first,lastName:last,username:user,type:type,shifts:clonedShifts,hidden:true,originalShifts:clonedShifts.slice()});
+      if(!curFn && cur){
+        curFn=fns.find(function(f){ return f.id===cur.id; });
+      }
+      if(!curFn && fns.length>0){
+        curFn=fns[0];
+      }
+      if(curFn){
+        if(!curFn.staff) curFn.staff=[];
+        var existingCur=curFn.staff.find(function(s){ return s.username && s.username.toLowerCase()===user.toLowerCase(); });
+        if(!existingCur){
+          curFn.staff.push({firstName:first,lastName:last,username:user,type:type,shifts:shifts.slice(),hidden:true,originalShifts:shifts.slice(),employmentType:type});
         } else {
-          existing.hidden=true;
+          existingCur.hidden=true;
+          existingCur.shifts=shifts.slice();
+          existingCur.firstName=first;
+          existingCur.lastName=last;
+          existingCur.employmentType=type;
         }
+        safeSetJSON('retail_roster_byFortnight_v1', fns);
+        console.log('Added to current roster:', curFn.id);
       }
-      safeSetJSON('retail_roster_byFortnight_v1', fns);
-    }
-    var users=safeGetJSON('retail_roster_users_v1',[]);
-    if(!users.find(function(u){ return u.username.toLowerCase()===user.toLowerCase(); })){
-      users.push({username:user,password:pass,role:'staff',type:type,firstName:first,lastName:last,hidden:true});
-      safeSetJSON('retail_roster_users_v1', users);
-    }
-    ['hs-first','hs-last','hs-user','hs-pass'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
-    for(var i=0;i<14;i++){ var el=document.getElementById('hs-shift-'+i); if(el) el.value=''; }
-    var chk=document.getElementById('hs-constant-check'); if(chk) chk.checked=false;
-    renderHiddenStaffPage();
-    renderRosterSafe();
-    toast('Added hidden staff: '+first+' '+last+' '+(constant?'(Constant across all)':'(This roster - now visible on main roster for admin)'));
-    try{ debouncedCloudSave(); cloudSave(); }catch(e){}
+      // If constant, apply to ALL rosters
+      if(constant){
+        fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+        for(var f=0;f<fns.length;f++){
+          var fn=fns[f];
+          if(!fn.staff) continue;
+          if(curFn && fn.id===curFn.id) continue;
+          var existing=fn.staff.find(function(s){ return s.username && s.username.toLowerCase()===user.toLowerCase(); });
+          if(!existing){
+            var clonedShifts=[];
+            for(var d=0;d<fn.dates.length;d++){
+              var day=fn.dates[d].day;
+              var matchingIdx=-1;
+              if(cur && cur.dates){
+                for(var od=0;od<cur.dates.length;od++){
+                  if(cur.dates[od].day===day){ matchingIdx=od; break; }
+                }
+              }
+              if(matchingIdx>=0) clonedShifts.push(shifts[matchingIdx]||'OFF');
+              else clonedShifts.push(shifts[d%shifts.length]||'OFF');
+            }
+            fn.staff.push({firstName:first,lastName:last,username:user,type:type,shifts:clonedShifts,hidden:true,originalShifts:clonedShifts.slice(),employmentType:type});
+          } else {
+            existing.hidden=true;
+          }
+        }
+        safeSetJSON('retail_roster_byFortnight_v1', fns);
+      }
+    }catch(e){ console.error('Add to roster error', e); }
+    
+    // Add to users
+    try{
+      var users=safeGetJSON('retail_roster_users_v1',[]);
+      if(!users.find(function(u){ return u.username && u.username.toLowerCase()===user.toLowerCase(); })){
+        users.push({username:user,password:pass,role:'staff',type:type,firstName:first,lastName:last,hidden:true,employmentType:type});
+        safeSetJSON('retail_roster_users_v1', users);
+      }
+    }catch(e){ console.error('Add to users error', e); }
+    
+    // Clear form
+    try{
+      ['hs-first','hs-last','hs-user','hs-pass'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+      for(var i=0;i<14;i++){ var el=document.getElementById('hs-shift-'+i); if(el) el.value=''; }
+      var chk=document.getElementById('hs-constant-check'); if(chk) chk.checked=false;
+    }catch(e){}
+    
+    // Render
+    try{ renderHiddenStaffPage(); }catch(e){ console.error('renderHiddenStaffPage error', e); }
+    try{ renderRosterSafe(); }catch(e){ console.error('renderRosterSafe error', e); }
+    
+    toast('Added hidden staff: '+first+' '+last+' ('+user+') - Now visible on main roster for admin - Saved: '+verify.length);
+    
     // Force cloud sync for LIVE
+    try{ debouncedCloudSave(); }catch(e){}
+    try{ cloudSave(); }catch(e){}
     try{
       var state=getAllState();
       if(state && typeof db!=='undefined' && db && db.ref){
-        db.ref('repco_state').set(state);
+        db.ref('repco_state').set(state).then(function(){ console.log('Hidden staff synced LIVE'); });
+      } else if(typeof FIREBASE_DB_URL!=='undefined'){
+        fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
       }
-    }catch(e){}
-  }catch(e){ console.error(e); toast('Error: '+e.message); }
+    }catch(e){ console.error('Cloud sync error', e); }
+    
+    // Ensure list shows
+    setTimeout(function(){ try{ renderHiddenStaffPage(); }catch(e){} }, 300);
+    
+  }catch(e){
+    console.error('addHiddenStaff error', e);
+    toast('Error adding hidden staff: '+e.message);
+    alert('Error: '+e.message+'\nCheck console for details');
+  }
 }
+
 
 function deleteHiddenStaff(idx){
   showCustomConfirm('Delete Hidden Staff?', 'Delete this hidden staff?', function(confirmed){
@@ -3887,34 +4018,46 @@ function renderMySchedule(){
         }
         if(r.shiftIdx===idx && r.fortnightId && dateObj.fortnight && r.fortnightId===dateObj.fortnight.id) return {req:r, index:rr, status:'pending'};
       }
-      // Then check approved within last 7 days - show as green approved
+      // Then check approved within last 14 days - show as green approved and actioned - FIXED for instant update
       for(var rr=0;rr<reqs.length;rr++){
         var r=reqs[rr];
         if(!r) continue;
         if(r.username && r.username.toLowerCase()!==myUsername) continue;
         if(r.status!=='approved') continue;
-        // Only show approved if recent (last 14 days) or still matches current shift
-        var isRecent = r.approvedTs && (Date.now() - r.approvedTs) < 14*24*60*60*1000;
+        var isRecent = true;
+        if(r.approvedTs){
+          isRecent = (Date.now() - r.approvedTs) < 14*24*60*60*1000;
+        } else if(r.ts){
+          isRecent = (Date.now() - r.ts) < 14*24*60*60*1000;
+        }
         if(!isRecent) continue;
         if(r.shiftISO && iso && r.shiftISO===iso) return {req:r, index:rr, status:'approved'};
         if(r.shiftDate){
           var sd=r.shiftDate;
           if(sd===dateObj.date+' '+dateObj.day || sd===dateObj.date || dateObj.date+' '+dateObj.day===sd) return {req:r, index:rr, status:'approved'};
         }
+        if(typeof r.shiftIdx==='number' && r.shiftIdx===idx) return {req:r, index:rr, status:'approved'};
       }
-      // Then check denied within last 7 days - show as denied (will revert to original)
+      // Then check denied within last 7 days - show as Rejected/Denied (will revert to original) - FIXED for instant update
       for(var rr=0;rr<reqs.length;rr++){
         var r=reqs[rr];
         if(!r) continue;
         if(r.username && r.username.toLowerCase()!==myUsername) continue;
-        if(r.status!=='denied') continue;
-        var isRecent = r.deniedTs && (Date.now() - r.deniedTs) < 7*24*60*60*1000;
+        if(r.status!=='denied' && r.status!=='rejected') continue;
+        var isRecent = true;
+        if(r.deniedTs){
+          isRecent = (Date.now() - r.deniedTs) < 14*24*60*60*1000;
+        } else if(r.ts){
+          isRecent = (Date.now() - r.ts) < 14*24*60*60*1000;
+        }
         if(!isRecent) continue;
         if(r.shiftISO && iso && r.shiftISO===iso) return {req:r, index:rr, status:'denied'};
         if(r.shiftDate){
           var sd=r.shiftDate;
           if(sd===dateObj.date+' '+dateObj.day || sd===dateObj.date || dateObj.date+' '+dateObj.day===sd) return {req:r, index:rr, status:'denied'};
         }
+        // Also match by shiftIdx if available
+        if(typeof r.shiftIdx==='number' && r.shiftIdx===idx) return {req:r, index:rr, status:'denied'};
       }
       return null;
     }
@@ -4960,7 +5103,7 @@ function submitShiftCorrectionRequest(idx, dateLabel, oldShift, newShift, reason
   <div class="r-header-consistent"><div class="r-title-consistent"><span>REPCO</span> ROSTER - HIDDEN STAFF</div><div class="r-btns-consistent"><button class="r-btn-consistent" onclick="showMain()">ROSTER</button><button class="r-btn-consistent" onclick="doLogout()">LOG OUT</button></div></div>
   <div class="page-inner" style="padding:14px">
     <div style="font-weight:900;margin-bottom:12px">HIDDEN STAFF - Admin only, not shown to employees, excluded from totals</div>
-    <div class="card" style="background:#fff;border:3px solid #111;border-radius:12px;padding:14px;margin-bottom:12px">
+    <div id="hidden-staff-form" class="card" style="background:#fff;border:3px solid #111;border-radius:12px;padding:14px;margin-bottom:12px">
       <div style="font-weight:900;margin-bottom:8px">ADD HIDDEN STAFF MANUALLY</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <input id="hs-first" placeholder="First Name" style="padding:10px;border-radius:9999px;border:2px solid #111">
@@ -4970,7 +5113,7 @@ function submitShiftCorrectionRequest(idx, dateLabel, oldShift, newShift, reason
         <select id="hs-type" style="padding:10px;border-radius:9999px;border:2px solid #111"><option value="casual">Casual</option><option value="fulltime">Full Time</option></select>
       </div>
       <div style="margin-top:12px;font-weight:900">ASSIGN SHIFTS FOR CURRENT FORTNIGHT (14 days, blank = OFF)</div>
-      <div id="hs-shifts-grid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-top:8px"></div>
+      <div id="hs-shifts-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(110px, 1fr));gap:8px;margin-top:8px;max-width:100%;overflow:hidden;box-sizing:border-box"></div>
       <button onclick="addHiddenStaff()" style="margin-top:12px;background:#E30613;color:#fff;border:none;border-radius:9999px;padding:12px 18px;font-weight:900;width:100%">ADD HIDDEN STAFF + CREATE LOGIN</button>
     </div>
     <div id="hs-list"></div>
