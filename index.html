@@ -580,7 +580,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022460000_FIX_SYNTAX_V50";
+const BUILD_ID="20261022470000_FORCE_FETCH_DENIED_V51";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -4611,6 +4611,71 @@ document.addEventListener('DOMContentLoaded',()=>{
 
 function renderMySchedule(){
   try{
+    // DANIEL FIX: Force fetch latest requests from Firebase on every My Schedule open
+    (async function(){
+      try{
+        var r1=await fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json?_t='+Date.now(),{cache:'no-store', mode:'cors'});
+        if(r1.ok){
+          var cloudReqs=await r1.json();
+          if(Array.isArray(cloudReqs)){
+            var localReqs=safeGetJSON('retail_roster_requests_v2',[]);
+            var myUser=(safeGet('repco_username')||'').toLowerCase();
+            console.log('FORCE FETCH: Cloud', cloudReqs.length, 'Local', localReqs.length, 'user', myUser);
+            var hasUpdate=false;
+            for(var i=0;i<cloudReqs.length;i++){
+              var cr=cloudReqs[i];
+              if(!cr || !cr.id) continue;
+              if(cr.username && cr.username.toLowerCase()!==myUser) continue;
+              var localIdx=localReqs.findIndex(function(lr){ return lr.id===cr.id; });
+              if(localIdx!==-1){
+                var lr=localReqs[localIdx];
+                if(lr.status==='pending' && (cr.status==='denied'||cr.status==='rejected'||cr.status==='approved')){
+                  console.log('FORCE FETCH: Updating', cr.id, 'from', lr.status, 'to', cr.status);
+                  localReqs[localIdx]=cr;
+                  hasUpdate=true;
+                }
+              }
+            }
+            if(hasUpdate){
+              safeSetJSON('retail_roster_requests_v2', localReqs);
+              try{localStorage.setItem('retail_roster_requests_update_ts', String(Date.now()));}catch(e){}
+              setTimeout(function(){ try{ renderMySchedule(); }catch(e){} },100);
+            }
+          }
+        }
+        var r2=await fetch(FIREBASE_DB_URL+'/repco_state.json?_t='+Date.now(),{cache:'no-store', mode:'cors'});
+        if(r2.ok){
+          var data=await r2.json();
+          if(data && data['retail_roster_requests_v2']){
+            var cloudReqs2=JSON.parse(data['retail_roster_requests_v2']);
+            if(Array.isArray(cloudReqs2)){
+              var localReqs2=safeGetJSON('retail_roster_requests_v2',[]);
+              var myUser2=(safeGet('repco_username')||'').toLowerCase();
+              var hasUpdate2=false;
+              for(var i=0;i<cloudReqs2.length;i++){
+                var cr=cloudReqs2[i];
+                if(!cr || !cr.id) continue;
+                if(cr.username && cr.username.toLowerCase()!==myUser2) continue;
+                var localIdx=localReqs2.findIndex(function(lr){ return lr.id===cr.id; });
+                if(localIdx!==-1){
+                  var lr=localReqs2[localIdx];
+                  if(lr.status==='pending' && (cr.status==='denied'||cr.status==='rejected'||cr.status==='approved')){
+                    console.log('FORCE FETCH (main): Updating', cr.id, 'from', lr.status, 'to', cr.status);
+                    localReqs2[localIdx]=cr;
+                    hasUpdate2=true;
+                  }
+                }
+              }
+              if(hasUpdate2){
+                safeSetJSON('retail_roster_requests_v2', localReqs2);
+                setTimeout(function(){ try{ renderMySchedule(); }catch(e){} },100);
+              }
+            }
+          }
+        }
+      }catch(e){ console.error('Force fetch error', e); }
+    })();
+
     if(typeof updateActivity==='function') updateActivity();
     var el=document.getElementById('mysched-list');
     if(!el) return;
