@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_RE_REQUEST_PENDING_V124";
+const BUILD_ID="20261022700000_BULK_PASS_FIRSTNAME_V125";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -3003,7 +3003,7 @@ function renderAccountMgmtPage(){
   const users=safeGetJSON('retail_roster_users_v1',[]); 
   const fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
   const cur=getCurrentFortnight();
-  let html='<div class="card"><div style="font-weight:900;margin-bottom:8px">ALL USERS - Linked to roster</div><div id="admin-user-list-all">'; 
+  let html='<div class="card" style="background:#111;color:#fff;padding:12px;margin-bottom:12px"><div style="font-weight:900;margin-bottom:8px">🔑 BULK PASSWORD RESET</div><div style="font-size:10px;margin-bottom:8px">Set all employee passwords to their first name (e.g., Chris -> Chris, Daniel -> Daniel). Hidden staff and both Michaels excluded. Admin/manager/master accounts excluded.</div><button onclick="adminSetAllPasswordsToFirstname()" style="background:#E30613;color:#fff;border:2px solid #fff;border-radius:9999px;padding:10px 14px;font-weight:900;width:100%">SET ALL PASSWORDS TO FIRSTNAME</button></div><div class="card"><div style="font-weight:900;margin-bottom:8px">ALL USERS - Linked to roster</div><div id="admin-user-list-all">'; 
   html+=users.map((u,i)=>{
     var mapped=null;
     try{ mapped=mapUsernameToStaffKey(u.username); }catch(e){}
@@ -3152,6 +3152,79 @@ function adminEditUser(idx){
       }catch(e){ console.error('LIVE USER EDIT error', e); }
     },500);
   }); 
+}
+
+function adminSetAllPasswordsToFirstname(){
+  try{
+    showCustomConfirm('Set all passwords to firstname?', '<div style="font-size:11px">This will set every employee password to their <b>firstname</b> (e.g., Chris -> Chris, Daniel -> Daniel).<br><br><b>Excluded:</b><br>- Hidden staff (in hidden staff list)<br>- Both Michaels (BLAIK & EVANS - keep as Michaelb/Michaele)<br>- Admin/manager/master accounts (admin, manager, master, Chris)<br><br>Are you sure?</div>', function(ok){
+      if(!ok) return;
+      var users=safeGetJSON('retail_roster_users_v1',[]);
+      var hidden=safeGetJSON('retail_roster_hidden_staff_v1',[]);
+      var hiddenUsernames={};
+      for(var hi=0;hi<hidden.length;hi++){
+        if(hidden[hi] && hidden[hi].username) hiddenUsernames[hidden[hi].username.toLowerCase()]=true;
+      }
+      var excludedUsernames=['admin','manager','master','michaelb','michaele','christopher.culling.3'];
+      var excludedFirstLast=[{first:'Michael',last:'BLAIK'},{first:'Michael',last:'EVANS'}];
+      var changed=0;
+      var skipped=[];
+      for(var i=0;i<users.length;i++){
+        var u=users[i];
+        if(!u || !u.username) continue;
+        var unameLower=u.username.toLowerCase();
+        var firstLower=(u.firstName||'').toLowerCase();
+        var lastUpper=(u.lastName||'').toUpperCase();
+        // Skip admin/manager/master
+        if(['admin','manager','master'].indexOf(unameLower)!==-1) { skipped.push(u.username+' (admin/manager)'); continue; }
+        // Skip if in excluded list
+        if(excludedUsernames.indexOf(unameLower)!==-1) { skipped.push(u.username+' (excluded Michael/hidden)'); continue; }
+        if(hiddenUsernames[unameLower]) { skipped.push(u.username+' (hidden)'); continue; }
+        // Skip Michaels by first/last
+        var isMichael=false;
+        for(var ei=0;ei<excludedFirstLast.length;ei++){
+          if(firstLower===excludedFirstLast[ei].first.toLowerCase() && lastUpper===excludedFirstLast[ei].last) { isMichael=true; break; }
+        }
+        if(isMichael) { skipped.push(u.username+' (Michael excluded)'); continue; }
+        // Skip if firstName empty
+        if(!u.firstName) { skipped.push(u.username+' (no firstname)'); continue; }
+        // Set password to firstname (preserve original case as stored, e.g., Chris)
+        var newPass=u.firstName;
+        // Optional: capitalize first letter, rest lower? But user said firstname, so keep as is
+        if(u.password!==newPass){
+          u.password=newPass;
+          changed++;
+        }
+      }
+      safeSetJSON('retail_roster_users_v1', users);
+      toast('Set '+changed+' passwords to firstname - skipped '+skipped.length);
+      renderAccountMgmtPage();
+      // Show details
+      setTimeout(function(){
+        showCustomConfirm('Bulk reset done - '+changed+' changed', '<div style="font-size:10px"><b>Changed '+changed+':</b><br>'+users.filter(function(u){return u.firstName && excludedUsernames.indexOf(u.username.toLowerCase())===-1 && !hiddenUsernames[u.username.toLowerCase()];}).slice(0,20).map(function(u){return u.username+' -> '+u.firstName;}).join('<br>')+'<br><br><b>Skipped ('+skipped.length+'):</b><br>'+skipped.join('<br>')+'</div>', function(){});
+      },500);
+      // Sync to cloud
+      try{
+        var state=getAllState();
+        state._ts=Date.now();
+        state._lastBulkPassReset=Date.now();
+        function pushWithFallback(url, body){
+          fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:body,mode:'cors',cache:'no-store'}).then(function(res){
+            if(!res.ok){ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }); }
+            else { safeSet('repco_cloud_ts', String(state._ts)); }
+          }).catch(function(){ try{ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }); }catch(e){} });
+        }
+        if(typeof db!=='undefined' && db && db.ref){
+          db.ref('repco_state').set(state).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); toast('Live: Bulk password reset synced'); }).catch(function(){ pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state)); });
+        } else {
+          pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state));
+        }
+        try{ pushWithFallback(FIREBASE_DB_URL+'/retail_roster_users_v1.json', JSON.stringify(users)); }catch(e){}
+        if(typeof BroadcastChannel!=='undefined'){
+          try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'user_edit', users:users, ts:Date.now()}); }catch(e){}
+        }
+      }catch(e){ console.error('bulk sync error', e); }
+    });
+  }catch(e){ console.error('adminSetAllPasswordsToFirstname error', e); toast('Error: '+e.message); }
 }
 
 function adminDelUser(idx){ 
