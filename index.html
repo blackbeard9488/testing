@@ -702,6 +702,7 @@ function enforceOnly8Fulltime(){
 
 
 
+
 function getCurrentFortnight(){
   var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
   if(!fns || fns.length===0) return null;
@@ -709,26 +710,19 @@ function getCurrentFortnight(){
   var targetDate;
   try{ var p=iso.split('-').map(function(v){return parseInt(v,10);}); targetDate=new Date(p[0],p[1]-1,p[2]); }catch(e){ targetDate=new Date(); }
   var isoTarget=targetDate.getFullYear()+'-'+String(targetDate.getMonth()+1).padStart(2,'0')+'-'+String(targetDate.getDate()).padStart(2,'0');
-  // Fix: Today 20/10 should be in fortnight ending 20/10, not next starting 21/10
-  // Sort by start date ascending
   var sorted=fns.slice().sort(function(a,b){
     if(!a.dates||!b.dates||!a.dates[0]||!b.dates[0]) return 0;
     return a.dates[0].iso.localeCompare(b.dates[0].iso);
   });
-  // First check exact iso match inclusive
   for(var i=0;i<sorted.length;i++){
     var fn=sorted[i];
     if(!fn.dates) continue;
     var start=fn.dates[0].iso;
     var end=fn.dates[fn.dates.length-1].iso;
     if(isoTarget>=start && isoTarget<=end){
-      // If multiple match (shouldn't), prefer the one that ends today or earlier (previous fortnight ending today)
-      // Check if there's next fortnight that also starts today or tomorrow
-      // For today 20/10, fortnight 07/10-20/10 ends today, 21/10-03/11 starts tomorrow - should return 07/10-20/10 as current
       return fn;
     }
   }
-  // Check date string match
   var dd=String(targetDate.getDate()).padStart(2,'0'); var mm=String(targetDate.getMonth()+1).padStart(2,'0'); var todayStr=dd+'/'+mm;
   for(var i=0;i<sorted.length;i++){
     var fn=sorted[i];
@@ -740,9 +734,7 @@ function getCurrentFortnight(){
     if(!fn.dates) continue;
     if(fn.dates.find(function(d){ return d.date===todayStr; })) return fn;
   }
-  // If today is before first roster, return first
   if(sorted.length>0 && isoTarget < sorted[0].dates[0].iso) return sorted[0];
-  // If today is after all rosters, return last
   var best=null;
   for(var i=0;i<sorted.length;i++){
     var fn=sorted[i];
@@ -757,6 +749,7 @@ function getCurrentFortnight(){
   var found=fns.find(function(f){ return f.id===curId; });
   return found||sorted[0]||fns[0];
 }
+
 
 function getSelectedFortnight(){
   var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
@@ -794,7 +787,7 @@ function deleteCurrentRoster(){
 }
 
 
-function renderCurrentFortnightIndicator(){ return ''; // Removed as requested }
+function renderCurrentFortnightIndicator(){ return ''; }
 
 function renderRosterSafe(){
   try{ applyPersistentGreens(); }catch(e){} var cur=getSelectedFortnight();if(!cur) cur=getCurrentFortnight(); if(!cur) return; 
@@ -1255,6 +1248,7 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
 
 
 
+
 function prevFortnight(){
   try{
     const fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
@@ -1297,6 +1291,7 @@ function nextFortnight(){
     toast('Next: '+sorted[idx].label);
   }catch(e){ toast('Error: '+e.message); }
 }
+
 
 function toggleTimeFormat(){const cur=safeGet('timeFormat')||'24h';const nxt=cur==='24h'?'12h':'24h';safeSet('timeFormat',nxt);toast('Time: '+nxt);renderRosterSafe(); applyRoleVisibility();}
 function showMain(){
