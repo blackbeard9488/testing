@@ -580,7 +580,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022680000_FIX_SYNC_V72";
+const BUILD_ID="20261022690000_FIX_SYNTAX_DENY_V75";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -2806,7 +2806,6 @@ function denyReq(i){
     try{ renderRequests(); }catch(e){}
     try{ renderMySchedule(); }catch(e){}
     toast('DENIED: '+r.username+' '+r.shiftDate+' - Pushing live...');
-    // Use EXACT same live push as submitShiftCorrectionRequest which is proven to work for Daniel's two devices
     setTimeout(function(){
       try{
         var state=getAllState();
@@ -2814,27 +2813,38 @@ function denyReq(i){
         state._lastDeniedId=r.id;
         state._lastDeniedUser=r.username;
         state._lastDeniedTs=Date.now();
-        if(typeof db!=='undefined' && db && db.ref){
-          db.ref('repco_state').set(state).then(function(){ 
-            console.log('LIVE DENY: SDK OK - admin notified, Daniel sees instantly');
-            safeSet('repco_cloud_ts', String(state._ts));
-          }).catch(function(err){ 
-            console.error('SDK failed', err);
-            fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state),mode:'cors',cache:'no-store'}).then(function(res){
-              console.log('LIVE DENY: REST fallback', res.ok);
+        function pushWithFallback(url, body, label){
+          console.log('LIVE DENY: Pushing', label);
+          fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:body,mode:'cors',cache:'no-store'}).then(function(res){
+            console.log('LIVE DENY: REST', label, res.ok, res.status);
+            if(!res.ok){
+              console.log('LIVE DENY: REST', label, 'failed', res.status, 'trying no-cors');
+              fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ console.log('LIVE DENY: no-cors sent', label); });
+            } else {
               safeSet('repco_cloud_ts', String(state._ts));
-            });
-          });
-        } else {
-          fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state),mode:'cors',cache:'no-store'}).then(function(res){
-            console.log('LIVE DENY: REST', res.ok);
-            safeSet('repco_cloud_ts', String(state._ts));
+            }
+          }).catch(function(e){
+            console.error('LIVE DENY: REST', label, 'error', e, 'trying no-cors');
+            try{ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }); }catch(e2){}
           });
         }
-        // Extra pushes for reliability
+        if(typeof db!=='undefined' && db && db.ref){
+          try{
+            db.ref('repco_state').set(state).then(function(){
+              console.log('LIVE DENY: SDK OK - Daniel will see DENIED instantly');
+              safeSet('repco_cloud_ts', String(state._ts));
+              toast('Live: Denied pushed via SDK');
+            }).catch(function(err){
+              console.error('LIVE DENY: SDK failed', err, 'trying REST');
+              pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
+            });
+          }catch(e){ pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state'); }
+        } else {
+          pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
+        }
         try{
-          fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(reqs),mode:'cors',cache:'no-store'});
-          fetch(FIREBASE_DB_URL+'/denied_requests/'+r.id+'.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(r),mode:'cors',cache:'no-store'});
+          pushWithFallback(FIREBASE_DB_URL+'/retail_roster_requests_v2.json', JSON.stringify(reqs), 'requests_v2');
+          pushWithFallback(FIREBASE_DB_URL+'/denied_requests/'+r.id+'.json', JSON.stringify(r), 'denied_single');
         }catch(e){}
         if(typeof BroadcastChannel!=='undefined'){
           try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'request_denied', id:r.id, request:r, ts:Date.now()}); }catch(e){}
@@ -2843,6 +2853,7 @@ function denyReq(i){
     },500);
   }catch(e){ console.error('DENY error', e); toast('Error: '+e.message); }
 }
+
 
 
 
@@ -4607,7 +4618,6 @@ function renderMySchedule(){
         }
       }
     }catch(e){ console.error('Aggressive fix error', e); }
-console.error('Aggressive fix error', e); }
 
 
     // IMMEDIATE LIVE FIX: Force overwrite pending->denied from cloud on every open - fixes Pending Approval stuck after admin denied
