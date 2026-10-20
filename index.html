@@ -513,7 +513,7 @@ body:not(.is-admin) .daily-total-casual {
 </div></div>
 
 <div id="repco-v65">
-<div id="my-schedule-card" style="display:none" style="display:none;background:#fff;border:3px solid #111;border-radius:12px;padding:12px 14px;margin:10px 14px;box-shadow:4px 4px 0 #111;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><div class="left"><div class="label" id="my-sched-label" style="font-size:11px;background:#111;color:#fff;border-radius:9999px;padding:4px 10px;display:inline-block;margin-bottom:4px;font-weight:900">MY SCHEDULE</div><div class="shift" id="my-sched-shift" style="font-size:16px;font-weight:900">-</div><div class="meta" id="my-sched-date" style="font-size:12px;font-weight:700;color:#555">-</div></div><div class="right" style="text-align:right"><div class="remaining" id="my-sched-remaining" style="font-size:18px;font-weight:900;color:#E30613">-</div><div class="meta" id="my-sched-until" style="font-size:12px;font-weight:700;color:#555">-</div></div></div>
+<div id="my-schedule-card" style="display:none;background:#fff;border:3px solid #111;border-radius:12px;padding:12px 14px;margin:10px 14px;box-shadow:4px 4px 0 #111;justify-content:flex-start;align-items:center;gap:12px;flex-wrap:wrap"><div class="left"><div class="label" id="my-sched-label" style="font-size:11px;background:#111;color:#fff;border-radius:9999px;padding:4px 10px;display:inline-block;margin-bottom:4px;font-weight:900">MY SCHEDULE</div><div class="shift" id="my-sched-shift" style="font-size:16px;font-weight:900">-</div><div class="meta" id="my-sched-date" style="font-size:12px;font-weight:700;color:#555">-</div></div><div class="right" style="text-align:right"><div class="remaining" id="my-sched-remaining" style="font-size:18px;font-weight:900;color:#E30613">-</div><div class="meta" id="my-sched-until" style="font-size:12px;font-weight:700;color:#555">-</div></div></div>
   <div class="r-controls"><select id="fortnight-select"></select><button onclick="prevFortnight()">PREV</button><button onclick="nextFortnight()">NEXT</button><button onclick="toggleTimeFormat()">12H/24H</button><button id="delete-roster-btn" id="delete-roster-btn" onclick="deleteCurrentRoster()" style="background:#E30613;color:#fff">DELETE ROSTER</button><span id="user-badge" style="margin-left:auto;background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:11px"></span><span id="admin-total-badge" style="display:none;background:#E30613;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:11px;margin-left:8px"></span><span id="brisbane-time-v141" style="background:#fff;border:2px solid #111;border-radius:9999px;padding:6px 10px;font-weight:900;font-size:11px"></span></div>
   <div id="roster-mount"></div>
 </div>
@@ -580,7 +580,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022620000_SAFE_DENIED_V66";
+const BUILD_ID="20261022640000_TIME_PANEL_FIX_V68";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -2780,12 +2780,12 @@ function approveReq(i){
   toast('Approved - '+(matched?'shift updated':'marked approved'));
 }
 function denyReq(i){
-  console.log('DENY: Admin denying index', i);
+  console.log('DENY: Admin clicked deny index', i);
   try{
     let reqs=safeGetJSON('retail_roster_requests_v2',[]);
     let r=reqs[i];
     if(!r){ toast('Error: Request not found'); return; }
-    console.log('DENY: Denying', r.id, r.username, r.shiftDate, 'status', r.status);
+    console.log('DENY: Denying', r.id, r.username, r.shiftDate);
     r.status='denied';
     r.deniedBy=safeGet('repco_username')||'admin';
     r.deniedTs=Date.now();
@@ -2798,58 +2798,56 @@ function denyReq(i){
     try{ renderRequests(); }catch(e){}
     try{ renderMySchedule(); }catch(e){}
     toast('DENIED: '+r.username+' '+r.shiftDate+' - Pushing live...');
-    try{
-      var state=getAllState();
-      state._ts=Date.now();
-      state._lastDeniedId=r.id;
-      state._lastDeniedUser=r.username;
-      state._lastDeniedTs=Date.now();
-      safeSet('repco_cloud_ts', String(state._ts));
-      if(typeof db!=='undefined' && db && db.ref){
-        try{ db.ref('repco_state').set(state).then(function(){ console.log('LIVE: SDK OK'); }).catch(function(e){ console.error('SDK failed', e); }); }catch(e){}
-        try{ db.ref('retail_roster_requests_v2').set(reqs).then(function(){ console.log('LIVE: SDK requests_v2 OK'); }).catch(function(e){}); }catch(e){}
-        try{ db.ref('denied_requests/'+r.id).set(r).then(function(){ console.log('LIVE: SDK denied_single OK'); }).catch(function(e){}); }catch(e){}
-      }
-      var jsonState=JSON.stringify(state);
-      var jsonReqs=JSON.stringify(reqs);
-      var jsonR=JSON.stringify(r);
-      // Firebase REST with cors + no-cors fallback
-      function pushWithFallback(url, body, label){
-        console.log('LIVE: Pushing', label, 'to', url.substring(0,60));
-        fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:body,mode:'cors',cache:'no-store'}).then(function(res){
-          console.log('LIVE: REST', label, res.ok, res.status);
-          if(!res.ok){
-            console.log('LIVE: REST', label, 'failed with', res.status, 'trying no-cors');
-            fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ console.log('LIVE: REST', label, 'no-cors sent'); });
-          }
-        }).catch(function(e){
-          console.error('LIVE: REST', label, 'error', e, 'trying no-cors');
-          try{ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}); }catch(e2){}
-        });
-      }
-      pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', jsonState, 'repco_state');
-      pushWithFallback(FIREBASE_DB_URL+'/retail_roster_requests_v2.json', jsonReqs, 'requests_v2');
-      pushWithFallback(FIREBASE_DB_URL+'/denied_requests/'+r.id+'.json', jsonR, 'denied_single');
-      // Public fallback - always works even if Firebase rules block
+    // Use EXACT same live push as submitShiftCorrectionRequest - this is proven to work instantly for Daniel's requests
+    setTimeout(function(){
       try{
-        fetch('https://www.jsonstore.io/api/bins/repco-roster-live-'+r.id,{method:'POST',headers:{'Content-Type':'application/json'},body:jsonR,mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE: jsonstore single', res.ok); }).catch(function(){});
-        fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-denied',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:r.id, request:r, ts:Date.now()}),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE: jsonstore all', res.ok); }).catch(function(){});
-      }catch(e){}
-      if(typeof BroadcastChannel!=='undefined'){
-        try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'request_denied', id:r.id, request:r, ts:Date.now()}); console.log('LIVE: BroadcastChannel sent'); }catch(e){}
-      }
-      // Retry
-      setTimeout(function(){
-        try{
-          var s2=getAllState();
-          s2._ts=Date.now();
-          pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(s2), 'repco_state retry');
-          pushWithFallback(FIREBASE_DB_URL+'/retail_roster_requests_v2.json', JSON.stringify(safeGetJSON('retail_roster_requests_v2',[])), 'requests_v2 retry');
-        }catch(e){}
-      },1500);
-    }catch(e){ console.error('DENY cloud error', e); }
+        var state=null;
+        if(typeof getAllState==='function') state=getAllState();
+        else state={retail_roster_requests_v2:JSON.stringify(reqs), _ts:Date.now()};
+        if(state){
+          state._ts=Date.now();
+          state._lastDeniedId=r.id;
+          state._lastDeniedUser=r.username;
+          state._lastDeniedTs=Date.now();
+          // Don't set repco_cloud_ts before push - let employee see new _ts > old _ts
+          if(typeof db!=='undefined' && db && db.ref){
+            db.ref('repco_state').set(state).then(function(){ 
+              console.log('LIVE DENY: Firebase SDK push OK - Daniel will see instantly like his own requests');
+              safeSet('repco_cloud_ts', String(state._ts));
+              toast('Live: Denied pushed via SDK');
+            }).catch(function(err){ 
+              console.error('LIVE DENY: SDK failed', err);
+              // Fallback to REST
+              fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state),mode:'cors',cache:'no-store'}).then(function(res){
+                console.log('LIVE DENY: REST fallback', res.ok, res.status);
+                safeSet('repco_cloud_ts', String(state._ts));
+              });
+            });
+          } else {
+            fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state),mode:'cors',cache:'no-store'}).then(function(res){
+              console.log('LIVE DENY: REST push', res.ok, res.status);
+              safeSet('repco_cloud_ts', String(state._ts));
+              if(res.ok) toast('Live: Denied pushed via REST');
+            }).catch(function(err){
+              console.error('LIVE DENY: REST failed', err);
+              // Try no-cors as last resort
+              try{ fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',body:JSON.stringify(state),mode:'no-cors',cache:'no-store'}).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }); }catch(e){}
+            });
+          }
+          // Also push to separate paths for extra reliability (same as before but after main push)
+          try{
+            fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(reqs),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE DENY: requests_v2', res.ok); }).catch(function(){});
+            fetch(FIREBASE_DB_URL+'/denied_requests/'+r.id+'.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(r),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE DENY: denied_single', res.ok); }).catch(function(){});
+          }catch(e){}
+          if(typeof BroadcastChannel!=='undefined'){
+            try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'request_denied', id:r.id, request:r, ts:Date.now()}); console.log('LIVE DENY: BroadcastChannel sent'); }catch(e){}
+          }
+        }
+      }catch(e){ console.error('LIVE DENY: Cloud error', e); }
+    },500); // Same 500ms delay as submitShiftCorrectionRequest - proven to work
   }catch(e){ console.error('DENY error', e); toast('Error: '+e.message); }
 }
+
 
 
 
@@ -2959,9 +2957,11 @@ function updateMySchedule(){
       let dt=document.getElementById('my-sched-date'); if(dt) dt.textContent=my.firstName+' '+my.lastName;
       let rm=document.getElementById('my-sched-remaining'); if(rm) rm.textContent='';
       let un=document.getElementById('my-sched-until'); if(un) un.textContent='';
-      card.classList.add('show');
+      card.style.display='flex';
+    card.classList.add('show');
       return;
     }
+    card.style.display='flex';
     card.classList.add('show');
     let lbl=document.getElementById('my-sched-label');
     let sh=document.getElementById('my-sched-shift');
