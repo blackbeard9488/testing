@@ -580,7 +580,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_DENY_SAME_LOGIC_V82";
+const BUILD_ID="20261022690000_FIX_TIME_PANEL_V86";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -1126,26 +1126,46 @@ l(async function(){
   setInterval(async function(){
     try{
       var rj=await fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-denied?_t='+Date.now(),{cache:'no-store', mode:'cors'});
-      if(!rj.ok) return;
+      if(!rj.ok){
+        console.log('LIVE SYNC: jsonstore denied poll cors failed', rj.status, 'trying no-cors');
+        try{ await fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-denied?_t='+Date.now(),{cache:'no-store', mode:'no-cors'}); }catch(e){}
+        return;
+      }
       var jd=await rj.json();
       if(!jd || !jd.request || !jd.request.id) return;
       var cr=jd.request;
       var localReqs=safeGetJSON('retail_roster_requests_v2',[]);
       var idx=localReqs.findIndex(function(lr){ return lr.id===cr.id; });
       if(idx!==-1 && localReqs[idx].status==='pending'){
-        console.log('LIVE SYNC: Found denied via jsonstore', cr.id, 'from', cr.username, '- Admin->Employee fix');
+        console.log('LIVE SYNC: Found denied via jsonstore', cr.id, 'from', cr.username, '- Admin->Employee fix - PENDING->DENIED');
         localReqs[idx]=cr;
         safeSetJSON('retail_roster_requests_v2', localReqs);
         try{ renderMySchedule(); }catch(e){}
         try{ renderRequests(); }catch(e){}
         try{ updateRequestsBadge(); }catch(e){}
-        toast('Live: Request denied by admin (jsonstore)');
+        toast('Live: Request denied by admin (jsonstore) - now showing DENIED');
+      } else if(idx===-1){
+        // Also check by date+username if ID not found
+        for(var j=0;j<localReqs.length;j++){
+          var lr=localReqs[j];
+          if(!lr || lr.status!=='pending') continue;
+          var m1=lr.shiftDate?lr.shiftDate.match(/(\d{1,2}\/\d{1,2})/):null;
+          var m2=cr.shiftDate?cr.shiftDate.match(/(\d{1,2}\/\d{1,2})/):null;
+          var lrKey=(lr.username||'').toLowerCase()+'|'+(m1?m1[1]:lr.shiftDate||'');
+          var crKey=(cr.username||'').toLowerCase()+'|'+(m2?m2[1]:cr.shiftDate||'');
+          if(lrKey===crKey){
+            console.log('LIVE SYNC: Found denied via jsonstore by DATE', cr.id, 'for', cr.username, 'pending->denied', lrKey);
+            localReqs[j]=cr;
+            safeSetJSON('retail_roster_requests_v2', localReqs);
+            try{ renderMySchedule(); }catch(e){}
+            toast('Live: Denied by date match');
+            break;
+          }
+        }
       }
     }catch(e){ console.log('jsonstore denied poll error', e.message); }
-  },2000);
-
-
-  // JSONSTORE fallback polling for USERS - username/password live sync
+  },1000);
+TORE fallback polling for USERS - username/password live sync
   setInterval(async function(){
     try{
       var rj=await fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-users?_t='+Date.now(),{cache:'no-store', mode:'cors'});
@@ -1307,7 +1327,7 @@ function restoreEditDraftIfNeeded(){
 
 function setupActivityTracking(){ try{ var last=safeGet('repco_last_activity'); if(last) lastActivityTs=parseInt(last,10)||Date.now(); var throttledMove=null; function onActivity(){ updateActivity(); } function onMove(){ if(throttledMove) return; throttledMove=setTimeout(function(){ throttledMove=null; updateActivity(); }, 5000); } ['click','keydown','input','touchstart','change'].forEach(function(evt){ document.addEventListener(evt, onActivity, {passive:true}); }); document.addEventListener('mousemove', onMove, {passive:true}); if(activityCheckInterval) clearInterval(activityCheckInterval); activityCheckInterval=setInterval(function(){ try{ var now=Date.now(); var diff=now-lastActivityTs; if(diff > INACTIVITY_LIMIT_MS){ var username=safeGet('repco_username'); if(!username) return; var input=document.getElementById('edit-shift-input'); if(input){ var draft=getEditDraft(); if(draft){ saveEditDraft(draft.rowIdx, draft.colIdx, input.value, draft.staffName, draft.dateLabel); } } toast('Session timed out due to inactivity - draft saved. Please log in again.'); var fns=safeGetJSON('retail_roster_byFortnight_v1',[]); if(fns && fns.length>0){ safeSetJSON('retail_roster_backup_autosave_v1', {fns:fns, ts:Date.now(), by:username, reason:'inactivity_timeout'}); } setTimeout(function(){ doLogout(); var err=document.getElementById('login-err'); if(err) err.textContent='Session timed out - your edits were auto-saved. Please log in again.'; }, 1500); } }catch(e){ console.error('activity check', e); } }, 60*1000); window.addEventListener('beforeunload', function(e){ try{ var input=document.getElementById('edit-shift-input'); if(input){ var draft=getEditDraft(); if(draft){ saveEditDraft(draft.rowIdx, draft.colIdx, input.value, draft.staffName, draft.dateLabel); } } var fns=safeGetJSON('retail_roster_byFortnight_v1',[]); if(fns && fns.length>0){ safeSetJSON('retail_roster_backup_autosave_v1', {fns:fns, ts:Date.now(), by:safeGet('repco_username')||'', reason:'beforeunload'}); } }catch(err){} }); window.addEventListener('pagehide', function(){ try{ var input=document.getElementById('edit-shift-input'); if(input){ var draft=getEditDraft(); if(draft) saveEditDraft(draft.rowIdx, draft.colIdx, input.value, draft.staffName, draft.dateLabel); } }catch(e){} }); document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='hidden'){ try{ var input=document.getElementById('edit-shift-input'); if(input){ var draft=getEditDraft(); if(draft) saveEditDraft(draft.rowIdx, draft.colIdx, input.value, draft.staffName, draft.dateLabel); } }catch(e){} } else { updateActivity(); } }); updateActivity(); }catch(e){ console.error('setupActivityTracking', e); } }
 
-function doLogin(){
+async function doLogin(){
   seedIfEmpty();
   var uEl=document.getElementById('login-user');
   var pEl=document.getElementById('login-pass');
@@ -1315,13 +1335,84 @@ function doLogin(){
   var p=(pEl.value||'').trim();
   var err=document.getElementById('login-err');
   if(!u||!p){ if(err) err.textContent='Enter username & password'; return; }
+  
+  // Always try to get latest users from cloud first - fixes admin username/password change not updating
+  try{
+    // Try jsonstore first (public, same as requests which works perfectly)
+    var rj=await fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-users?_t='+Date.now(),{cache:'no-store', mode:'cors'});
+    if(rj.ok){
+      var jd=await rj.json();
+      if(jd && jd.users && Array.isArray(jd.users) && jd.users.length>0){
+        var localUsers=safeGetJSON('retail_roster_users_v1',[]);
+        var cloudUsers=jd.users;
+        var hasChange=false;
+        if(localUsers.length!==cloudUsers.length) hasChange=true;
+        else {
+          for(var i=0;i<cloudUsers.length;i++){
+            var cu=cloudUsers[i];
+            var lu=localUsers.find(function(x){ return x.username.toLowerCase()===cu.username.toLowerCase(); });
+            if(!lu) { hasChange=true; break; }
+            if(lu.password!==cu.password || lu.role!==cu.role || lu.username!==cu.username) { hasChange=true; break; }
+          }
+        }
+        if(hasChange){
+          console.log('doLogin: Found newer users via jsonstore, syncing', cloudUsers.length, 'users');
+          safeSetJSON('retail_roster_users_v1', cloudUsers);
+        }
+      }
+    }
+  }catch(e){ console.log('doLogin jsonstore pre-fetch error', e.message); }
+  
+  try{
+    // Try Firebase REST as well
+    var rf=await fetch(FIREBASE_DB_URL+'/retail_roster_users_v1.json?_t='+Date.now(),{cache:'no-store', mode:'cors'});
+    if(rf.ok){
+      var fUsers=await rf.json();
+      if(Array.isArray(fUsers) && fUsers.length>0){
+        var localUsers2=safeGetJSON('retail_roster_users_v1',[]);
+        // If Firebase has different count or any password differs, use it
+        var hasChange2=false;
+        if(localUsers2.length!==fUsers.length) hasChange2=true;
+        else {
+          for(var i=0;i<fUsers.length;i++){
+            var cu=fUsers[i];
+            var lu=localUsers2.find(function(x){ return x.username.toLowerCase()===cu.username.toLowerCase(); });
+            if(!lu || lu.password!==cu.password) { hasChange2=true; break; }
+          }
+        }
+        if(hasChange2){
+          console.log('doLogin: Found newer users via Firebase, syncing');
+          safeSetJSON('retail_roster_users_v1', fUsers);
+        }
+      }
+    }
+  }catch(e){ console.log('doLogin Firebase pre-fetch error', e.message); }
+  
   var users=safeGetJSON('retail_roster_users_v1',[]);
   var found=users.find(function(x){ return x.username.toLowerCase()===u.toLowerCase() && x.password===p; });
   if(!found){
-    found=users.find(function(x){ return x.username.toLowerCase()===u.toLowerCase(); });
-    if(!found || found.password!==p){
-      if(err) err.textContent='Incorrect password or username';
-      return;
+    // Also try case-insensitive password check and trim
+    found=users.find(function(x){ return x.username.toLowerCase()===u.toLowerCase() && (x.password||'').trim()===p.trim(); });
+    if(!found){
+      // Final fallback: check cloud one more time with no-cors (in case cors failed)
+      try{
+        var rj2=await fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-users?_t='+Date.now(),{cache:'no-store', mode:'cors'});
+        if(rj2.ok){
+          var jd2=await rj2.json();
+          if(jd2 && jd2.users){
+            var cloudFound=jd2.users.find(function(x){ return x.username.toLowerCase()===u.toLowerCase() && (x.password===p || (x.password||'').trim()===p.trim()); });
+            if(cloudFound){
+              console.log('doLogin: Found user via jsonstore final fallback', cloudFound.username);
+              safeSetJSON('retail_roster_users_v1', jd2.users);
+              found=cloudFound;
+            }
+          }
+        }
+      }catch(e){}
+      if(!found){
+        if(err) err.textContent='Incorrect password or username';
+        return;
+      }
     }
   }
   safeSet('repco_username', found.username);
@@ -1341,6 +1432,8 @@ function doLogin(){
   }
   toast('Welcome '+found.firstName);
 }
+
+
 window.doLogin = doLogin;
 
 
@@ -3037,9 +3130,12 @@ function denyReq(i){
         }catch(e){}
         
         try{
-          fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-denied',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request:r, ts:Date.now()}),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE DENY: jsonstore all-denied', res.ok); }).catch(function(){});
-          fetch('https://www.jsonstore.io/api/bins/repco-roster-live-'+r.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(r),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE DENY: jsonstore single', res.ok); }).catch(function(){});
-        }catch(e){}
+          // JSONSTORE with cors + no-cors fallback - same as request which works perfectly
+          fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-denied',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request:r, ts:Date.now()}),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE DENY: jsonstore all-denied', res.ok, res.status); }).catch(function(e){ console.log('LIVE DENY: jsonstore all-denied cors failed, trying no-cors', e.message); try{ fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-denied',{method:'POST',body:JSON.stringify({request:r, ts:Date.now()}),mode:'no-cors',cache:'no-store'}); }catch(e2){} });
+          fetch('https://www.jsonstore.io/api/bins/repco-roster-live-'+r.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(r),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE DENY: jsonstore single', res.ok); }).catch(function(e){ try{ fetch('https://www.jsonstore.io/api/bins/repco-roster-live-'+r.id,{method:'POST',body:JSON.stringify(r),mode:'no-cors',cache:'no-store'}); }catch(e2){} });
+          // Also push to all-requests bin so employee's existing all-requests polling finds denied (same logic as submit)
+          fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-requests',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:r.id, request:r, ts:Date.now()}),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE DENY: jsonstore all-requests (same as submit)', res.ok); }).catch(function(e){ try{ fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-requests',{method:'POST',body:JSON.stringify({id:r.id, request:r, ts:Date.now()}),mode:'no-cors',cache:'no-store'}); }catch(e2){} });
+        }catch(e){ console.error('LIVE DENY: jsonstore error', e); }
 
         
         try{
@@ -5240,7 +5336,8 @@ function renderMySchedule(){
           else if(h>0) countdownText='Starts in '+h+'h '+m+'m - '+timeShiftDate.day+' '+timeShiftDate.date+' '+timeShift;
           else countdownText='Starts in '+m+' minutes - '+timeShiftDate.day+' '+timeShiftDate.date+' '+timeShift;
         }
-        timePanelHtml='<div class="card" style="background:#111;color:#fff;border:3px solid #E30613;padding:12px"><div style="font-weight:900;font-size:11px;color:#FFEB3B">TIME TILL SHIFT END</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+timeShiftDate.day+' '+timeShiftDate.date+' - '+timeShift+'</div><div style="font-weight:900;font-size:14px;color:#B6F7C5">'+countdownText+'</div>'+(isCurrent?'<div style="margin-top:8px;background:#333;height:8px;border-radius:9999px;overflow:hidden"><div style="width:'+progress+'%;background:#E30613;height:100%"></div></div>':'')+'</div>';
+        var panelTitle=isCurrent?'TIME TILL SHIFT END':'TIME TILL NEXT SHIFT';
+        timePanelHtml='<div class="card" style="background:#111;color:#fff;border:3px solid #E30613;padding:12px"><div style="font-weight:900;font-size:11px;color:#FFEB3B">'+panelTitle+'</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+timeShiftDate.day+' '+timeShiftDate.date+' - '+timeShift+'</div><div style="font-weight:900;font-size:14px;color:#B6F7C5">'+countdownText+'</div>'+(isCurrent?'<div style="margin-top:8px;background:#333;height:8px;border-radius:9999px;overflow:hidden"><div style="width:'+progress+'%;background:#E30613;height:100%"></div></div>':'')+'</div>';
       }
     }catch(e){ console.error('Time panel error', e); }
     var currentShift=null;
