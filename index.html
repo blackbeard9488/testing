@@ -580,7 +580,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022400000_FIX_PH_SAVE_AND_FORCE_STATUS_V44";
+const BUILD_ID="20261022430000_LIVE_SYNC_EMPLOYEE_V47";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -801,6 +801,46 @@ function applyCloudState(state,isInitial){
                // FORCE SEE ANY STATUS: Do NOT delete pending when denied exists - keep all statuses visible
         // Only deduplicate by ID, keep all statuses
         // Remove duplicates and ensure we keep actioned versions
+        
+        // DANIEL FIX: If cloud has denied/approved and local has pending for same date, keep cloud (denied/approved)
+        function extractDateKeyMerge(str){
+          if(!str) return '';
+          var m=str.match(/(\d{1,2}\/\d{1,2})/);
+          if(m) return m[1];
+          var m2=str.match(/(\d{4}-\d{2}-\d{2})/);
+          if(m2){
+            var parts=m2[1].split('-');
+            if(parts.length===3) return parts[2]+'/'+parts[1];
+          }
+          return '';
+        }
+        // Build map of denied/approved dates from cloud
+        var cloudDeniedDates={};
+        for(var cd=0;cd<merged.length;cd++){
+          var cr=merged[cd];
+          if(!cr) continue;
+          if(cr.status==='denied'||cr.status==='rejected'||cr.status==='approved'){
+            var ck=extractDateKeyMerge(cr.shiftDate||'')||extractDateKeyMerge(cr.shiftISO||'');
+            if(ck) cloudDeniedDates[(cr.username||'').toLowerCase()+'|'+ck]=true;
+          }
+        }
+        // Filter out local pending if cloud has denied/approved for same date
+        var filteredForPriority=[];
+        for(var fp=0;fp<merged.length;fp++){
+          var fr=merged[fp];
+          if(!fr) continue;
+          if(fr.status==='pending'){
+            var pk=extractDateKeyMerge(fr.shiftDate||'')||extractDateKeyMerge(fr.shiftISO||'');
+            if(pk && cloudDeniedDates[(fr.username||'').toLowerCase()+'|'+pk]){
+              console.log('DANIEL FIX: Cloud has denied/approved for date', pk, 'removing local pending', fr.id);
+              changed=true;
+              continue;
+            }
+          }
+          filteredForPriority.push(fr);
+        }
+        merged=filteredForPriority;
+        
         var finalMerged=[];
         var seen={};
         var finalMerged=[];
@@ -880,15 +920,35 @@ async function cloudLoad(){
       if(data && data._ts){
         var localTs=parseInt(safeGet('repco_cloud_ts')||'0');
         if(data._ts>localTs){ applyCloudState(data,true); safeSet('repco_cloud_ts',String(data._ts)); toast('Synced from cloud'); }
+        // LIVE: Listen for real-time changes - pushes instantly to employee phones
         db.ref('repco_state').on('value',function(s){
           var d=s.val(); if(!d||!d._ts) return;
           var lastTs=parseInt(safeGet('repco_cloud_ts')||'0');
           if(d._ts>lastTs){
-            applyCloudState(d,false); safeSet('repco_cloud_ts',String(d._ts)); 
+            console.log('LIVE SYNC: New data from Firebase, applying to employee phone');
+            applyCloudState(d,false); 
+            safeSet('repco_cloud_ts',String(d._ts));
+            try{
+              // If employee is on My Schedule, re-render instantly
+              var isMySched=document.getElementById('mysched-page') && document.getElementById('mysched-page').classList.contains('show');
+              if(isMySched) renderMySchedule();
+              // Check if any request was denied/approved and show toast
+              if(d['retail_roster_requests_v2']){
+                var reqs=JSON.parse(d['retail_roster_requests_v2']);
+                var myUser=(safeGet('repco_username')||'').toLowerCase();
+                var denied=reqs.filter(function(r){ return r.username&&r.username.toLowerCase()===myUser && (r.status==='denied'||r.status==='rejected'); });
+                if(denied.length>0){
+                  var latest=denied[denied.length-1];
+                  if(latest.deniedTs && Date.now()-latest.deniedTs < 10000){
+                    toast('Your request for '+ (latest.shiftDate||'') +' was DENIED by admin - LIVE UPDATE');
+                  }
+                }
+              }
+            }catch(e){}
           }
         }); 
-        setInterval(function(){ try{ var reqs=safeGetJSON('retail_roster_requests_v2',[]); var lastUpdate=safeGet('retail_roster_requests_update_ts'); if(lastUpdate){ renderMySchedule(); } }catch(e){} },3000);
-setInterval(async function(){
+        setInterval(function(){ try{ var reqs=safeGetJSON('retail_roster_requests_v2',[]); var lastUpdate=safeGet('retail_roster_requests_update_ts'); if(lastUpdate){ renderMySchedule(); } }catch(e){} },2000);
+        setInterval(async function(){
           try{
             var ss=await db.ref('repco_state').once('value'); var dd=ss.val();
             if(dd && dd._ts){
@@ -896,24 +956,80 @@ setInterval(async function(){
               if(dd._ts>lt){ applyCloudState(dd,false); safeSet('repco_cloud_ts',String(dd._ts)); }
             }
           }catch(e){}
-        },8000);
+        },3000);
         return;
       }
     }
+    // REST API fallback - LIVE polling every 2 seconds for employee
     var res=await fetch(FIREBASE_DB_URL+'/repco_state.json',{cache:'no-store'});
     if(res.ok){ var data=await res.json(); if(data&&data._ts){ var localTs=parseInt(safeGet('repco_cloud_ts')||'0'); if(data._ts>localTs){ applyCloudState(data,true); safeSet('repco_cloud_ts',String(data._ts)); } } }
   }catch(e){ console.log("cloudLoad",e); }
+  // LIVE SYNC FOR EMPLOYEE: Check every 2 seconds for request status changes
   setInterval(async function(){
     try{
-      var r=await fetch(FIREBASE_DB_URL+'/repco_state.json?_t='+Date.now(),{cache:'no-store'});
+      var r=await fetch(FIREBASE_DB_URL+'/repco_state.json?_t='+Date.now(),{cache:'no-store', mode:'cors'});
       if(!r.ok) return;
       var d=await r.json();
       if(d && d._ts){
         var lt=parseInt(safeGet('repco_cloud_ts')||'0');
-        if(d._ts>lt){ applyCloudState(d,false); safeSet('repco_cloud_ts',String(d._ts)); }
+        if(d._ts>lt){
+          console.log('LIVE POLL: New data detected, applying - employee will see DENIED/APPROVED instantly');
+          applyCloudState(d,false); 
+          safeSet('repco_cloud_ts',String(d._ts));
+          // Auto re-render My Schedule if open - LIVE UPDATE
+          try{
+            var isMySched=document.getElementById('mysched-page') && document.getElementById('mysched-page').classList.contains('show');
+            if(isMySched){
+              renderMySchedule();
+            }
+            // Also check if requests changed and show live toast for denial
+            if(d['retail_roster_requests_v2']){
+              var cloudReqs=JSON.parse(d['retail_roster_requests_v2']);
+              var localReqs=safeGetJSON('retail_roster_requests_v2',[]);
+              var myUser=(safeGet('repco_username')||'').toLowerCase();
+              // Find newly denied
+              for(var i=0;i<cloudReqs.length;i++){
+                var cr=cloudReqs[i];
+                if(!cr || cr.username.toLowerCase()!==myUser) continue;
+                if(cr.status==='denied'||cr.status==='rejected'){
+                  var localMatch=localReqs.find(function(lr){ return lr.id===cr.id; });
+                  if(!localMatch || localMatch.status==='pending'){
+                    // Status changed from pending to denied - LIVE
+                    console.log('LIVE: Request', cr.id, 'changed to DENIED, updating employee UI');
+                    toast('LIVE UPDATE: Your request for '+(cr.shiftDate||'')+' was '+cr.status.toUpperCase()+' by admin');
+                    break;
+                  }
+                }
+                if(cr.status==='approved'){
+                  var localMatch=localReqs.find(function(lr){ return lr.id===cr.id; });
+                  if(!localMatch || localMatch.status==='pending'){
+                    console.log('LIVE: Request', cr.id, 'changed to APPROVED');
+                    toast('LIVE UPDATE: Your request for '+(cr.shiftDate||'')+' was APPROVED ✓');
+                    break;
+                  }
+                }
+              }
+            }
+          }catch(e){ console.error('Live render error', e); }
+        }
+      }
+    }catch(e){ console.error('Live poll error', e); }
+  },2000);
+  // Extra fast check when My Schedule page is open - every 1 second
+  setInterval(function(){
+    try{
+      var isMySched=document.getElementById('mysched-page') && document.getElementById('mysched-page').classList.contains('show');
+      if(isMySched){
+        // Force re-render to show any status changes that arrived via cloud
+        var lastCheck=safeGet('repco_last_mysched_render')||'0';
+        var now=Date.now();
+        if(now-parseInt(lastCheck) > 1000){
+          safeSet('repco_last_mysched_render', String(now));
+          renderMySchedule();
+        }
       }
     }catch(e){}
-  },5000);
+  },1000);
 }
 
 async function cloudSave(){
@@ -2641,6 +2757,7 @@ function denyReq(i){
     var reqDate=r.shiftDate||'';
     var reqIso=r.shiftISO||'';
     var reqIdx=r.shiftIdx;
+    var reqUser=r.username||'';
     function extractDateKeyD(str){
       if(!str) return '';
       var m=str.match(/(\d{1,2}\/\d{1,2})/);
@@ -2653,13 +2770,14 @@ function denyReq(i){
       return '';
     }
     var reqDateKey=extractDateKeyD(reqDate)||extractDateKeyD(reqIso);
-    // Mark as denied
+    // Mark as denied - LIVE
     r.status='denied';
     r.readByStaff=false;
     r.readByAdmin=true;
     r.deniedBy=safeGet('repco_username')||'admin';
     r.deniedTs=Date.now();
-    // DANIEL FIX: Remove ANY pending for same user+date (21/10) - not just exact match
+    r.livePushTs=Date.now(); // For live sync detection
+    // Remove ANY pending for same user+date
     for(var j=reqs.length-1;j>=0;j--){
       if(j===i) continue;
       var other=reqs[j];
@@ -2667,12 +2785,11 @@ function denyReq(i){
       if(other.username && r.username && other.username.toLowerCase()!==r.username.toLowerCase()) continue;
       if(other.status!=='pending') continue;
       var otherDateKey=extractDateKeyD(other.shiftDate||'')||extractDateKeyD(other.shiftISO||'');
-      // Remove if same date key (21/10) OR same ISO OR same shiftIdx
       if((reqDateKey && otherDateKey && reqDateKey===otherDateKey) ||
          (other.shiftDate===reqDate) || 
          (other.shiftISO && reqIso && other.shiftISO===reqIso) || 
          (typeof other.shiftIdx==='number' && typeof reqIdx==='number' && other.shiftIdx===reqIdx)){
-        console.log('DANIEL FIX: Removing duplicate pending for same date:', other.id, other.shiftDate, 'dateKey', otherDateKey);
+        console.log('LIVE DENY: Removing duplicate pending for same date:', other.id);
         reqs.splice(j,1);
         if(j<i) i--;
       }
@@ -2683,38 +2800,56 @@ function denyReq(i){
     renderRequests();
     try{ renderMySchedule(); }catch(e){}
     try{ renderRosterSafe(); }catch(e){}
-    try{ if(typeof updateRequestsBadge==='function') updateRequestsBadge(); }catch(e){}
-    // Immediate cloud sync - DANIEL FIX - try multiple times
+    // LIVE PUSH TO EMPLOYEE PHONE - instant
     try{
-      if(typeof debouncedCloudSave==='function') debouncedCloudSave();
-      if(typeof cloudSave==='function') cloudSave();
-      var state=null;
-      if(typeof getAllState==='function') state=getAllState();
-      if(state){
-        safeSet('repco_cloud_ts', String(state._ts||Date.now()));
-        if(typeof db!=='undefined' && db && db.ref){
-          db.ref('repco_state').set(state).then(function(){
-            console.log('DANIEL FIX: Denied synced to cloud - employee will see REJECTED, id:', reqId);
-          }).catch(function(err){
-            console.error('Firebase set failed, trying fetch', err);
-            fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)}).then(function(){ console.log('Fetch sync success'); });
+      var state=getAllState();
+      safeSet('repco_cloud_ts', String(state._ts||Date.now()));
+      // Push immediately via Firebase SDK if available
+      if(typeof db!=='undefined' && db && db.ref){
+        db.ref('repco_state').set(state).then(function(){
+          console.log('LIVE PUSH: Denied synced via SDK - employee will see instantly, user:', reqUser);
+          toast('LIVE: Denied pushed to '+reqUser+' - they will see REJECTED instantly');
+        }).catch(function(err){
+          console.error('SDK push failed, using fetch', err);
+          fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state), mode:'cors'}).then(function(r){
+            console.log('LIVE PUSH via fetch:', r.ok);
+            toast(r.ok ? 'LIVE: Denied pushed to employee phone via fetch' : 'Fetch failed: '+r.status);
           });
-        }
-        // Always also do fetch - more reliable
-        fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)}).then(function(r){
-          console.log('DANIEL FIX: Fetch PUT success', r.ok);
-          if(!r.ok) throw new Error('PUT failed '+r.status);
-        }).catch(function(e){ console.error('Fetch PUT failed', e); });
-        // Retry after 1s
-        setTimeout(function(){
-          try{
-            var state2=getAllState();
-            fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state2)});
-          }catch(e){}
-        },1000);
+        });
       }
-    }catch(e){ console.error('Cloud sync error on deny', e); }
-    toast('Denied - Employee will now see REJECTED/DENIED for '+oldShift+' (was '+r.newShift+') - Pending cleared - SYNCED TO DANIEL');
+      // Always also do REST API fetch - most reliable for cross-device
+      fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state), mode:'cors', cache:'no-store'}).then(function(r){
+        console.log('LIVE DENY: Fetch PUT', r.ok, 'for user', reqUser);
+        if(!r.ok) throw new Error('PUT failed '+r.status);
+        return r.json();
+      }).then(function(){
+        console.log('LIVE DENY: Successfully pushed to Firebase, employee phone will update in 2 seconds');
+      }).catch(function(e){ 
+        console.error('LIVE DENY: Fetch PUT failed', e);
+        // Retry with no-cors as fallback
+        try{
+          fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',body:JSON.stringify(state), mode:'no-cors'});
+        }catch(e2){}
+      });
+      // Immediate retries for reliability - employee sees denial within 2 seconds
+      setTimeout(function(){
+        try{
+          var state2=getAllState();
+          fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state2), mode:'cors', cache:'no-store'}).then(function(r){ console.log('LIVE RETRY 1s:', r.ok); });
+        }catch(e){}
+      },1000);
+      setTimeout(function(){
+        try{
+          var state3=getAllState();
+          fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state3), mode:'cors', cache:'no-store'}).then(function(r){ console.log('LIVE RETRY 3s:', r.ok); });
+        }catch(e){}
+      },3000);
+      // Also use localStorage event for same-device instant update
+      try{
+        localStorage.setItem('repco_live_deny_'+reqId, JSON.stringify({id:reqId, user:reqUser, date:reqDate, ts:Date.now(), status:'denied'}));
+      }catch(e){}
+    }catch(e){ console.error('Live push error', e); }
+    toast('DENIED - LIVE PUSHED to '+reqUser+' for '+reqDate+' - Employee phone will show REJECTED in 2 seconds');
   }catch(e){ toast('Error: '+e.message); console.error(e); }
 }
 
@@ -3091,12 +3226,31 @@ function openCreatePublicHolidayModal(editId){
       var dateObj=new Date(dateIso);
       var dateLabel=String(dateObj.getDate()).padStart(2,'0')+'/'+String(dateObj.getMonth()+1).padStart(2,'0');
       var holidays=getPublicHolidays();
-      if(editing){
+      // FIXED: Find editing again in fresh holidays array by id - outer editing is stale reference
+      var editingFresh=null;
+      if(editId){
+        editingFresh=holidays.find(function(h){ return h.id===editId; });
+      }
+      if(editingFresh){
+        editingFresh.dateISO=dateIso;
+        editingFresh.dateLabel=dateLabel;
+        editingFresh.name=name;
+        editingFresh.staffAllocations=tempPublicHolidayStaff.slice();
+        editingFresh.updatedTs=Date.now();
+        console.log('FIXED: Updated existing holiday', editId, 'with', tempPublicHolidayStaff.length, 'staff');
+      } else if(editing){
+        // Fallback to old editing reference
         editing.dateISO=dateIso;
         editing.dateLabel=dateLabel;
         editing.name=name;
         editing.staffAllocations=tempPublicHolidayStaff.slice();
         editing.updatedTs=Date.now();
+        // Ensure it's in holidays array
+        var found=holidays.find(function(h){ return h.id===editing.id; });
+        if(!found){
+          holidays.push(editing);
+        }
+        console.log('Fallback updated holiday', editing.id);
       } else {
         var newHoliday={
           id:'ph_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),
@@ -4448,8 +4602,8 @@ function renderMySchedule(){
     }catch(e){}
     var reqs=safeGetJSON('retail_roster_requests_v2',[]);
     var myUsername=(safeGet('repco_username')||'').toLowerCase();
-                function findRequestForShift(dateObj, iso, idx){
-      // FIXED: Force see ANY request status whether approved or denied - no 14-day hide, no prioritization that hides status
+                    function findRequestForShift(dateObj, iso, idx){
+      // FIXED FOR DANIEL: Prioritize denied/approved over pending, but force see ANY status (no 14-day hide)
       function extractDateKey(str){
         if(!str) return '';
         var m=str.match(/(\d{1,2}\/\d{1,2})/);
@@ -4483,38 +4637,59 @@ function renderMySchedule(){
         return false;
       }
       
-      // FORCE SEE ANY STATUS: Check all statuses, return whatever matches - approved, denied, pending all visible
-      // First check for exact matches for any status - no 14-day filter, always show
+      // PRIORITY 1: Check denied/rejected - HIGHEST, always show if exists (no 14-day filter)
       for(var rr=0;rr<reqs.length;rr++){
         var r=reqs[rr];
         if(!r) continue;
         if(r.username && r.username.toLowerCase()!==myUsername) continue;
-        // Match by ISO or date - return whatever status it has
+        if(r.status!=='denied' && r.status!=='rejected') continue;
         var rDateKey=extractDateKey(r.shiftDate||'')||extractDateKey(r.shiftISO||'');
         var objDateKey=extractDateKey(dateObj.date||'')||dateObj.date;
         var dateMatch = (rDateKey && objDateKey && rDateKey===objDateKey) || (r.shiftDate && datesMatch(r.shiftDate, dateObj, iso)) || (r.shiftISO && iso && r.shiftISO===iso);
-        if(!dateMatch) continue;
-        // If shiftIdx also specified, check it
-        if(typeof r.shiftIdx==='number' && typeof idx==='number' && r.shiftIdx!==idx){
-          // Allow date match even if idx differs - date is primary
-          if(!rDateKey || !objDateKey || rDateKey!==objDateKey) continue;
+        if(!dateMatch){
+          if(typeof r.shiftIdx==='number' && typeof idx==='number' && r.shiftIdx===idx){
+            if(!r.fortnightId || !dateObj.fortnight || r.fortnightId===dateObj.fortnight.id){
+              dateMatch=true;
+            }
+          }
         }
-        // Return whatever status it is - denied, approved, pending all forced visible
-        return {req:r, index:rr, status:r.status};
+        if(dateMatch) return {req:r, index:rr, status:'denied'};
       }
-      // Fallback: check by shiftIdx only
+      // PRIORITY 2: Check approved - SECOND HIGHEST
       for(var rr=0;rr<reqs.length;rr++){
         var r=reqs[rr];
         if(!r) continue;
         if(r.username && r.username.toLowerCase()!==myUsername) continue;
-        if(typeof r.shiftIdx==='number' && r.shiftIdx===idx){
-          if(r.fortnightId && dateObj.fortnight && r.fortnightId===dateObj.fortnight.id){
-            return {req:r, index:rr, status:r.status};
-          }
-          if(!r.fortnightId || !dateObj.fortnight){
-            return {req:r, index:rr, status:r.status};
+        if(r.status!=='approved') continue;
+        var rDateKey=extractDateKey(r.shiftDate||'')||extractDateKey(r.shiftISO||'');
+        var objDateKey=extractDateKey(dateObj.date||'')||dateObj.date;
+        var dateMatch = (rDateKey && objDateKey && rDateKey===objDateKey) || (r.shiftDate && datesMatch(r.shiftDate, dateObj, iso)) || (r.shiftISO && iso && r.shiftISO===iso);
+        if(!dateMatch){
+          if(typeof r.shiftIdx==='number' && typeof idx==='number' && r.shiftIdx===idx){
+            if(!r.fortnightId || !dateObj.fortnight || r.fortnightId===dateObj.fortnight.id){
+              dateMatch=true;
+            }
           }
         }
+        if(dateMatch) return {req:r, index:rr, status:'approved'};
+      }
+      // PRIORITY 3: Check pending - LOWEST, only if no denied/approved exists for same date
+      for(var rr=0;rr<reqs.length;rr++){
+        var r=reqs[rr];
+        if(!r) continue;
+        if(r.username && r.username.toLowerCase()!==myUsername) continue;
+        if(r.status!=='pending') continue;
+        var rDateKey=extractDateKey(r.shiftDate||'')||extractDateKey(r.shiftISO||'');
+        var objDateKey=extractDateKey(dateObj.date||'')||dateObj.date;
+        var dateMatch = (rDateKey && objDateKey && rDateKey===objDateKey) || (r.shiftDate && datesMatch(r.shiftDate, dateObj, iso)) || (r.shiftISO && iso && r.shiftISO===iso);
+        if(!dateMatch){
+          if(typeof r.shiftIdx==='number' && typeof idx==='number' && r.shiftIdx===idx){
+            if(!r.fortnightId || !dateObj.fortnight || r.fortnightId===dateObj.fortnight.id){
+              dateMatch=true;
+            }
+          }
+        }
+        if(dateMatch) return {req:r, index:rr, status:'pending'};
       }
       return null;
     }
