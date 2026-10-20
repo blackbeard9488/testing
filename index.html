@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_APPROVE_DENIED_V106";
+const BUILD_ID="20261022690000_FIX_GREEN_G_V108";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -1956,12 +1956,11 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
           var isGFlag=false;
           var actualShift=newVal;
           if(up==='G' || up==='GREEN'){
-            isGFlag=true;
-            isGreen=false;
+            isGreen=true;
             actualShift=current;
             if(up.startsWith('G ')){
               actualShift=newVal.substring(2).trim();
-              isGFlag=true;
+              isGreen=true;
             }
           } else if(up==='AB' || up==='ABSENT' || up==='A'){
             isAB=true;
@@ -1972,14 +1971,14 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
           } else if(up==='OFF' || up===''){
             actualShift='OFF';
           }
-          // Auto G for Luke or Chris with 7:30 start or 20:00 end
+          // Auto G for Luke or Chris with 7:30 start or 20:00 end - sets GOLD G status, separate from green
           try{
-            if(!isGFlag && !isAB && !isNA && actualShift && actualShift!=='OFF'){
+            if(!isGreen && !isAB && !isNA && actualShift && actualShift!=='OFF'){
               var fnLower=(staff.firstName||'').toLowerCase();
               if(fnLower==='luke' || fnLower==='chris' || fnLower==='christopher'){
                 if(isGShift(actualShift, staff.firstName)){
                   isGFlag=true;
-                  console.log('Auto G for', staff.firstName, actualShift);
+                  console.log('Auto GOLD G for', staff.firstName, actualShift);
                 }
               }
             }
@@ -4630,93 +4629,64 @@ function renderMySchedule(){
     }catch(e){ console.error('Aggressive fix error', e); }
 
 
-    // IMMEDIATE LIVE FIX: Force overwrite pending->denied from cloud on every open - fixes Pending Approval stuck after admin denied - with no-cors fallback for mobile
+    // FIXED LIVE SYNC: Sync approved/denied from cloud to local - respects most recent and does NOT force denied over approved
     (function(){
       try{
         var localReqs=safeGetJSON('retail_roster_requests_v2',[]);
         var hasPending=localReqs.some(function(r){ return r.status==='pending'; });
-        if(!hasPending) return;
-        console.log('IMMEDIATE LIVE: My Schedule opened, checking for denied that should overwrite pending', localReqs.filter(function(r){ return r.status==='pending'; }).map(function(r){ return r.id; }));
-        function overwritePendingWithDenied(deniedList, source){
+        // Even if no pending, still sync to ensure approved/denied are up to date
+        function overwritePendingWithFinal(finalList, source){
           try{
             var lReqs=safeGetJSON('retail_roster_requests_v2',[]);
-            var myUser=(safeGet('repco_username')||'').toLowerCase();
             var hasUpdate=false;
-            for(var i=0;i<deniedList.length;i++){
-              var cr=deniedList[i];
+            for(var i=0;i<finalList.length;i++){
+              var cr=finalList[i];
               if(!cr || !cr.id) continue;
               if(cr.status!=='denied' && cr.status!=='rejected' && cr.status!=='approved') continue;
               var idx=lReqs.findIndex(function(lr){ return lr.id===cr.id; });
-              if(idx!==-1 && lReqs[idx].status==='pending'){
-                var localUser=(lReqs[idx].username||'').toLowerCase();
-                var cloudUser=(cr.username||'').toLowerCase();
-                if(lReqs[idx].id===cr.id){
-                  if(!localUser || !cloudUser || localUser===cloudUser || !myUser || localUser===myUser){
-                    console.log('IMMEDIATE LIVE: Found denied via', source, cr.id, 'for', cr.username, 'pending->denied - AUTO FIX (ID match)');
+              if(idx!==-1){
+                // Only overwrite if local is pending and cloud is final (approved/denied) with newer or equal ts
+                if(lReqs[idx].status==='pending'){
+                  var localTs=lReqs[idx].ts||0;
+                  var cloudTs=cr.ts||cr.approvedTs||cr.deniedTs||0;
+                  // If cloud is final and newer or same, overwrite
+                  if(cloudTs>=localTs || cr.status!=='pending'){
+                    console.log('LIVE SYNC: Updating', cr.id, 'from pending to', cr.status, 'via', source);
                     lReqs[idx]=cr;
                     hasUpdate=true;
                   }
-                }
-              } else {
-                // Also check by date+username if ID not found - handles case where pending ID differs from denied ID (e.g., old code)
-                for(var j=0;j<lReqs.length;j++){
-                  var lr=lReqs[j];
-                  if(!lr || lr.status!=='pending') continue;
-                  var lrDate=(lr.shiftDate||'').split(' ')[0];
-                  var crDate=(cr.shiftDate||'').split(' ')[0];
-                  var m1=lr.shiftDate?lr.shiftDate.match(/(\d{1,2}\/\d{1,2})/):null;
-                  var m2=cr.shiftDate?cr.shiftDate.match(/(\d{1,2}\/\d{1,2})/):null;
-                  var lrKey=(lr.username||'').toLowerCase()+'|'+(m1?m1[1]:lrDate);
-                  var crKey=(cr.username||'').toLowerCase()+'|'+(m2?m2[1]:crDate);
-                  if(lrKey===crKey){
-                    console.log('IMMEDIATE LIVE: Found denied via', source, cr.id, 'for', cr.username, 'pending->denied by DATE match', lrKey, '- AUTO FIX');
-                    lReqs[j]=cr;
+                } else if(lReqs[idx].status!==cr.status){
+                  // If local is already final but different from cloud, keep most recent
+                  var localFinalTs=lReqs[idx].approvedTs||lReqs[idx].deniedTs||lReqs[idx].ts||0;
+                  var cloudFinalTs=cr.approvedTs||cr.deniedTs||cr.ts||0;
+                  if(cloudFinalTs>localFinalTs){
+                    console.log('LIVE SYNC: Updating final status', cr.id, 'from', lReqs[idx].status, 'to', cr.status, 'via', source);
+                    lReqs[idx]=cr;
                     hasUpdate=true;
-                    break;
                   }
                 }
               }
             }
             if(hasUpdate){
               safeSetJSON('retail_roster_requests_v2', lReqs);
-              console.log('IMMEDIATE LIVE: Updated from', source, 're-rendering My Schedule - Daniel will see DENIED');
+              console.log('LIVE SYNC: Updated from', source);
               try{ renderMySchedule(); }catch(e){}
               try{ renderRequests(); }catch(e){}
-              toast('Live: Request '+source+' updated by admin - check My Schedule');
+              toast('Live sync: requests updated from '+source);
             }
           }catch(e){ console.error('overwrite error', e); }
         }
-        // Check Firebase denied_requests with cors + no-cors fallback
-        fetch(FIREBASE_DB_URL+'/denied_requests.json?_t='+Date.now(),{cache:'no-store', mode:'cors'}).then(function(res){
-          if(!res.ok) throw new Error('cors failed '+res.status);
-          return res.json();
-        }).then(function(deniedMap){
-          if(!deniedMap) return;
-          var list=[];
-          for(var key in deniedMap){ if(deniedMap[key] && deniedMap[key].id) list.push(deniedMap[key]); }
-          if(list.length) overwritePendingWithDenied(list, 'denied_requests');
-        }).catch(function(e){
-          console.log('denied_requests cors failed, trying no-cors fallback', e.message);
-          // Try no-cors - will get opaque response, so try jsonstore instead
-          try{
-            fetch(FIREBASE_DB_URL+'/denied_requests.json?_t='+Date.now(),{cache:'no-store', mode:'no-cors'}).then(function(){
-              // no-cors gives opaque, can't read, so try requests_v2
-              console.log('denied_requests no-cors sent, trying requests_v2');
-            });
-          }catch(e2){}
-        });
-        // Check requests_v2 with cors + no-cors fallback
+        // Only sync from requests_v2 - removed legacy denied_requests.json which caused approve->denied bug
         fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json?_t='+Date.now(),{cache:'no-store', mode:'cors'}).then(function(res){
           if(!res.ok) throw new Error('cors failed '+res.status);
           return res.json();
         }).then(function(cloudReqs){
           if(!Array.isArray(cloudReqs)) return;
-          overwritePendingWithDenied(cloudReqs, 'requests_v2');
+          overwritePendingWithFinal(cloudReqs, 'requests_v2');
         }).catch(function(e){
-          console.log('requests_v2 cors failed, trying no-cors', e.message);
-          try{ fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json?_t='+Date.now(),{cache:'no-store', mode:'no-cors'}); }catch(e2){}
+          console.log('requests_v2 sync failed', e.message);
         });
-        // Also check repco_state for denied
+        // Also check repco_state for requests
         fetch(FIREBASE_DB_URL+'/repco_state.json?_t='+Date.now(),{cache:'no-store', mode:'cors'}).then(function(res){
           if(!res.ok) throw new Error('repco_state failed');
           return res.json();
@@ -4724,11 +4694,11 @@ function renderMySchedule(){
           if(!state || !state['retail_roster_requests_v2']) return;
           try{
             var cloudReqs=JSON.parse(state['retail_roster_requests_v2']);
-            if(Array.isArray(cloudReqs)) overwritePendingWithDenied(cloudReqs, 'repco_state');
+            if(Array.isArray(cloudReqs)) overwritePendingWithFinal(cloudReqs, 'repco_state');
           }catch(e){}
         }).catch(function(e){});
-      }catch(e){ console.error('IMMEDIATE LIVE error', e); }
-    })();
+      }catch(e){ console.error('LIVE SYNC error', e); }
+    })();    })();
 
 
     if(typeof updateActivity==='function') updateActivity();
@@ -4857,26 +4827,7 @@ function renderMySchedule(){
         }
         return best;
       }
-      // LIVE FIX: Check localStorage last denied marker - if admin denied, force denied even if reqs array still pending
-      try{
-        for(var rr=0;rr<reqs.length;rr++){
-          var r=reqs[rr];
-          if(!r || !r.id) continue;
-          if(r.status!=='pending') continue;
-          try{
-            var lastDeniedStr=localStorage.getItem('repco_last_denied_'+r.id);
-            if(lastDeniedStr){
-              var lastDenied=JSON.parse(lastDeniedStr);
-              if(lastDenied && lastDenied.status==='denied'){
-                console.log('findRequestForShift: Found last denied marker for', r.id, 'forcing denied');
-                var idx2=reqs.findIndex(function(x){ return x.id===r.id; });
-                if(idx2!==-1) reqs[idx2].status='denied';
-                return {req:lastDenied, index:rr, status:'denied'};
-              }
-            }
-          }catch(e){}
-        }
-      }catch(e){}
+      // Removed legacy repco_last_denied_ forcing - was causing approve->denied bug
       // PRIORITY 3: Check pending - LOWEST, only if no denied/approved exists for same date
       for(var rr=0;rr<reqs.length;rr++){
         var r=reqs[rr];
