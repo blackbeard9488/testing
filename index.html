@@ -2056,54 +2056,140 @@ document.addEventListener('DOMContentLoaded',function(){
 });
 
 
+
 function renderHiddenStaffPage(){
-  let cur=getCurrentFortnight();
-  if(!cur) return;
-  let grid=document.getElementById('hs-shifts-grid');
-  if(grid){
-    grid.innerHTML='';
-    cur.dates.forEach((d,i)=>{
-      let div=document.createElement('div');
-      div.innerHTML='<label style="font-size:10px;font-weight:900">'+d.day+' '+d.date+'</label><input id="hs-shift-'+i+'" placeholder="08:00-16:00 or OFF" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;font-size:11px">';
-      grid.appendChild(div);
-    });
-  }
-  let listEl=document.getElementById('hs-list');
-  if(!listEl) return;
-  let hidden=safeGetJSON('retail_roster_hidden_v1',[]);
-  let shiftsStore=safeGetJSON('retail_roster_hidden_shifts_v1',{});
-  let users=safeGetJSON('retail_roster_users_v1',[]);
-  if(hidden.length===0){
-    listEl.innerHTML='<div class="card" style="background:#fff;border:3px solid #111;border-radius:12px;padding:12px">No hidden staff</div>';
-    return;
-  }
-  let htmlStr='';
-  hidden.forEach(name=>{
-    let shifts=shiftsStore[name]||Array(14).fill('OFF');
-    let user=users.find(u=>(u.firstName+' '+u.lastName).toLowerCase()===name.toLowerCase());
-    // Calculate days ON and total hours
-    let daysOn=[];
-    let totalHours=0;
-    if(cur && cur.dates){
-      shifts.forEach((sh,idx)=>{
-        if(sh && sh.toUpperCase()!=='OFF' && sh.toUpperCase()!=='NA' && sh.toUpperCase()!=='AB' && sh.trim()!==''){
-          let d=cur.dates[idx];
-          let dateLabel=d?d.day+' '+d.date: 'Day '+(idx+1);
-          let hrs=0;
-          try{ hrs=netH(sh); }catch(e){ hrs=0; }
-          totalHours+=hrs;
-          daysOn.push(dateLabel+': '+sh+' ('+hrs.toFixed(1)+'h)');
-        }
+  try{
+    var el=document.getElementById('hs-list');
+    if(!el) return;
+    var hidden=safeGetJSON('retail_roster_hidden_staff_v1',[]);
+    var html='<div class="card" style="background:#111;color:#fff;font-weight:900">HIDDEN STAFF - Admin only on roster, shows in staff buddies if overlapping<br><small>Hidden staff appear only on admin main roster view, but will show in TODAY/TOMORROW buddies if shift overlaps</small></div>';
+    if(hidden.length===0){
+      html+='<div class="card" style="padding:10px">No hidden staff</div>';
+    } else {
+      hidden.forEach(function(h, idx){
+        var constantBadge=h.constantAcrossRosters ? '<span style="background:#B6F7C5;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px;font-weight:900;margin-left:6px">CONSTANT ACROSS ALL ROSTERS</span>' : '<span style="background:#FFEB3B;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px">THIS ROSTER ONLY</span>';
+        html+='<div class="card" style="padding:10px"><div style="font-weight:900;font-size:11px">'+(h.lastName||'')+', '+(h.firstName||'')+' ('+(h.username||'')+') - '+(h.type||'casual')+' '+constantBadge+'</div><div style="font-size:10px">Shifts: '+(h.shifts?h.shifts.join(', '):'OFF')+'</div><div style="margin-top:6px"><button onclick="deleteHiddenStaff('+idx+')" style="background:#E30613;color:#fff;border-radius:9999px;padding:4px 8px;font-weight:900;font-size:9px">DELETE</button></div></div>';
       });
     }
-    let onCount=daysOn.length;
-    let offCount=shifts.length-onCount;
-    let daysOnHtml=daysOn.length>0?daysOn.join('<br>'):'OFF all days';
-    let escapedName=name.replace(/'/g, "\\'");
-    htmlStr+='<div class="card" style="background:#fff;border:3px solid #111;border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:4px 4px 0 #111"><div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px"><div style="flex:1;min-width:250px"><b style="font-size:14px">'+name+'</b><br><small style="background:#111;color:#fff;border-radius:9999px;padding:3px 8px;font-size:10px;font-weight:900">LOGIN: '+(user?user.username+' / '+user.password:'No login')+'</small> <small style="background:#8FC6F5;color:#111;border-radius:9999px;padding:3px 8px;font-size:10px;font-weight:900;margin-left:6px">'+(user?user.employmentType||'casual':'casual')+'</small><br><br><div style="font-size:11px;font-weight:900">DAYS ON: '+onCount+' | OFF: '+offCount+' | TOTAL: '+totalHours.toFixed(1)+'h minus breaks</div><div style="font-size:10px;margin-top:6px;background:#F2F2F2;border-radius:8px;padding:8px;max-height:120px;overflow-y:auto">'+daysOnHtml+'</div></div><div style="display:flex;flex-direction:column;gap:6px;min-width:120px"><button onclick="editHiddenStaff(\''+escapedName+'\')" style="background:#111;color:#fff;border:none;border-radius:9999px;padding:10px 14px;font-weight:900;font-size:11px;cursor:pointer">EDIT</button><button onclick="unhideEmployee(\''+escapedName+'\')" style="background:#fff;color:#111;border:2px solid #111;border-radius:9999px;padding:8px 12px;font-weight:900;font-size:11px;cursor:pointer">UNHIDE</button><button onclick="deleteHiddenStaff(\''+escapedName+'\')" style="background:#E30613;color:#fff;border:none;border-radius:9999px;padding:8px 12px;font-weight:900;font-size:11px;cursor:pointer">DELETE</button></div></div></div>';
-  });
-  listEl.innerHTML=htmlStr;
+    el.innerHTML=html;
+    var grid=document.getElementById('hs-shifts-grid');
+    if(grid){
+      var cur=getSelectedFortnight(); if(!cur) cur=getCurrentFortnight();
+      if(cur){
+        grid.innerHTML='';
+        cur.dates.forEach(function(d, i){
+          var inp=document.createElement('input');
+          inp.id='hs-shift-'+i;
+          inp.placeholder=d.day+' '+d.date;
+          inp.style.cssText='padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px';
+          grid.appendChild(inp);
+        });
+      }
+    }
+    // Add constant checkbox if not exists
+    var constantDiv=document.getElementById('hs-constant-div');
+    if(!constantDiv){
+      var form=document.getElementById('hidden-staff-form');
+      if(form){
+        var div=document.createElement('div');
+        div.id='hs-constant-div';
+        div.style.cssText='margin:10px 0;padding:8px;background:#FFFBCC;border:2px solid #111;border-radius:12px';
+        div.innerHTML='<label style="font-weight:900;font-size:11px"><input type="checkbox" id="hs-constant-check" style="margin-right:6px">Make shifts CONSTANT across ALL rosters (same shifts every fortnight)</label><br><small style="font-size:9px">If checked, these shifts will be applied to this staff member in every fortnight roster automatically</small>';
+        form.appendChild(div);
+      }
+    }
+  }catch(e){ console.error('renderHiddenStaffPage error', e); }
 }
+function addHiddenStaff(){
+  try{
+    var first=(document.getElementById('hs-first')?.value||'').trim();
+    var last=(document.getElementById('hs-last')?.value||'').trim();
+    var user=(document.getElementById('hs-user')?.value||'').trim();
+    var pass=(document.getElementById('hs-pass')?.value||'').trim();
+    var type=(document.getElementById('hs-type')?.value||'casual');
+    var constant=document.getElementById('hs-constant-check')?.checked||false;
+    if(!first || !last || !user){ toast('First, Last, Username required'); return; }
+    var cur=getSelectedFortnight(); if(!cur) cur=getCurrentFortnight();
+    var shifts=[];
+    if(cur){
+      for(var i=0;i<cur.dates.length;i++){
+        var val=(document.getElementById('hs-shift-'+i)?.value||'').trim();
+        shifts.push(val||'OFF');
+      }
+    } else {
+      shifts=Array(14).fill('OFF');
+    }
+    var hidden=safeGetJSON('retail_roster_hidden_staff_v1',[]);
+    hidden.push({firstName:first,lastName:last,username:user,password:pass,type:type,shifts:shifts,constantAcrossRosters:constant});
+    safeSetJSON('retail_roster_hidden_staff_v1', hidden);
+    // If constant, apply to all rosters
+    if(constant){
+      var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+      for(var f=0;f<fns.length;f++){
+        var fn=fns[f];
+        if(!fn.staff) continue;
+        var existing=fn.staff.find(function(s){ return s.username && s.username.toLowerCase()===user.toLowerCase(); });
+        if(!existing){
+          // Clone shifts pattern to match this fortnight's day of week pattern if possible
+          var clonedShifts=[];
+          for(var d=0;d<fn.dates.length;d++){
+            var day=fn.dates[d].day;
+            // Find matching day in original shifts
+            var matchingIdx=-1;
+            for(var od=0;od<cur.dates.length;od++){
+              if(cur.dates[od].day===day){ matchingIdx=od; break; }
+            }
+            if(matchingIdx>=0) clonedShifts.push(shifts[matchingIdx]||'OFF');
+            else clonedShifts.push(shifts[d%shifts.length]||'OFF');
+          }
+          fn.staff.push({firstName:first,lastName:last,username:user,type:type,shifts:clonedShifts,hidden:true,originalShifts:clonedShifts.slice()});
+        } else {
+          existing.hidden=true;
+        }
+      }
+      safeSetJSON('retail_roster_byFortnight_v1', fns);
+    }
+    var users=safeGetJSON('retail_roster_users_v1',[]);
+    if(!users.find(function(u){ return u.username.toLowerCase()===user.toLowerCase(); })){
+      users.push({username:user,password:pass,role:'staff',type:type,firstName:first,lastName:last,hidden:true});
+      safeSetJSON('retail_roster_users_v1', users);
+    }
+    ['hs-first','hs-last','hs-user','hs-pass'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+    for(var i=0;i<14;i++){ var el=document.getElementById('hs-shift-'+i); if(el) el.value=''; }
+    var chk=document.getElementById('hs-constant-check'); if(chk) chk.checked=false;
+    renderHiddenStaffPage();
+    renderRosterSafe();
+    toast('Added hidden staff: '+first+' '+last+' '+(constant?'(Constant across all)':''));
+    try{ debouncedCloudSave(); }catch(e){}
+  }catch(e){ console.error(e); toast('Error: '+e.message); }
+}
+function deleteHiddenStaff(idx){
+  showCustomConfirm('Delete Hidden Staff?', 'Delete this hidden staff?', function(confirmed){
+    if(!confirmed) return;
+    var hidden=safeGetJSON('retail_roster_hidden_staff_v1',[]);
+    if(idx>=0 && idx<hidden.length){
+      var removed=hidden[idx];
+      hidden.splice(idx,1);
+      safeSetJSON('retail_roster_hidden_staff_v1', hidden);
+      var users=safeGetJSON('retail_roster_users_v1',[]);
+      var uIdx=users.findIndex(function(u){ return u.username.toLowerCase()===removed.username.toLowerCase(); });
+      if(uIdx>=0){ users.splice(uIdx,1); safeSetJSON('retail_roster_users_v1', users); }
+      // Also remove from all rosters
+      var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+      for(var f=0;f<fns.length;f++){
+        var fn=fns[f];
+        if(!fn.staff) continue;
+        fn.staff=fn.staff.filter(function(s){ return !(s.username && s.username.toLowerCase()===removed.username.toLowerCase()); });
+      }
+      safeSetJSON('retail_roster_byFortnight_v1', fns);
+      renderHiddenStaffPage();
+      renderRosterSafe();
+      toast('Deleted hidden staff');
+      try{ debouncedCloudSave(); }catch(e){}
+    }
+  });
+}
+
 
 function editHiddenStaff(name){
   let hidden=safeGetJSON('retail_roster_hidden_v1',[]);
@@ -2744,6 +2830,7 @@ document.addEventListener('DOMContentLoaded',()=>{
 
 
 
+
 function renderMySchedule(){
   try{
     if(typeof updateActivity==='function') updateActivity();
@@ -2751,27 +2838,22 @@ function renderMySchedule(){
     if(!el) return;
     var todayISO=getISO();
     var dd=String(new Date(todayISO).getDate()).padStart(2,'0'); var mm=String(new Date(todayISO).getMonth()+1).padStart(2,'0'); var todayStr=dd+'/'+mm;
-    var curForToday=getCurrentFortnight();
-    var selectedCur=getSelectedFortnight(); if(!selectedCur) selectedCur=curForToday;
     var fnsAll=safeGetJSON('retail_roster_byFortnight_v1',[]);
     if(fnsAll.length===0){ el.innerHTML='<div class="card">No rosters</div>'; return; }
-    // Find current fortnight containing today for current shift logic
-    var cur=curForToday||selectedCur;
+    var curForToday=getCurrentFortnight();
     var foundToday=null;
     for(var ff=0;ff<fnsAll.length;ff++){ var fnn=fnsAll[ff]; if(!fnn.dates) continue; if(fnn.dates.find(function(d){return d.iso===todayISO;})){ foundToday=fnn; break; } }
     if(!foundToday){
       for(var ff=0;ff<fnsAll.length;ff++){ var fnn=fnsAll[ff]; if(!fnn.dates) continue; if(fnn.dates.find(function(d){return d.date===todayStr;})){ foundToday=fnn; break; } }
     }
-    if(foundToday) cur=foundToday;
-    var myStaff=findMyStaff(cur);
-    if(!myStaff){
-      // Try find in any fortnight
-      for(var ff=0;ff<fnsAll.length;ff++){
-        var fnn=fnsAll[ff];
-        var ms=findMyStaff(fnn);
-        if(ms){ myStaff=ms; cur=fnn; break; }
-      }
+    var cur=foundToday||curForToday;
+    var myStaff=null;
+    for(var ff=0;ff<fnsAll.length;ff++){
+      var fnn=fnsAll[ff];
+      var ms=findMyStaff(fnn);
+      if(ms){ if(!myStaff) myStaff=ms; }
     }
+    if(!myStaff) myStaff=findMyStaff(cur);
     if(!myStaff){
       el.innerHTML='<div class="card">Could not find your staff record - username: '+safeGet('repco_username')+'</div><div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%;font-size:11px">BACK TO ROSTER</button></div>';
       return;
@@ -2788,8 +2870,23 @@ function renderMySchedule(){
       var mm2=parseInt(parts.find(function(p){return p.type==='minute';}).value);
       brisbaneNow=new Date(y,mo,d,hh,mm2);
     }catch(e){}
-    var htmlStr='<div class="card" style="background:#111;color:#fff"><b>MY SCHEDULE - '+(myStaff.lastName?myStaff.lastName.toUpperCase():'')+' '+(myStaff.firstName||'')+'</b><br>All Fortnights ('+fnsAll.length+')<br><small>Today: TUE 20/10/2026 ('+todayISO+') - Showing ALL rostered shifts</small></div>';
-    // Collect ALL shifts across ALL fortnights for this employee
+    var reqs=safeGetJSON('retail_roster_requests_v2',[]);
+    var myUsername=(safeGet('repco_username')||'').toLowerCase();
+    function findRequestForShift(dateObj, iso){
+      for(var rr=0;rr<reqs.length;rr++){
+        var r=reqs[rr];
+        if(!r) continue;
+        if(r.username && r.username.toLowerCase()!==myUsername) continue;
+        if(r.status!=='pending') continue;
+        if(r.shiftISO && iso && r.shiftISO===iso) return r;
+        if(r.shiftDate){
+          var sd=r.shiftDate;
+          if(sd.indexOf(dateObj.date)!==-1 || (dateObj.date+' '+dateObj.day===sd) || sd===dateObj.date) return r;
+          if(dateObj.iso && sd.indexOf(dateObj.iso)!==-1) return r;
+        }
+      }
+      return null;
+    }
     var allShifts=[];
     var sortedFns=fnsAll.slice().sort(function(a,b){
       if(!a.dates||!b.dates||!a.dates[0]||!b.dates[0]) return 0;
@@ -2808,101 +2905,87 @@ function renderMySchedule(){
         if(isOff) continue;
         var parsed=parseShiftRange(sh);
         if(!parsed) continue;
-        allShifts.push({date:d, shift:sh, idx:i, fortnight:fn, fortnightId:fn.id, parsed:parsed, iso:d.iso||''});
+        // Only future or today (no past)
+        if(d.iso && d.iso < todayISO) continue;
+        if(d.iso===todayISO){
+          // Check if shift already ended today - if so, skip (no past)
+          try{
+            var shiftEnd=new Date(brisbaneNow);
+            shiftEnd.setHours(Math.floor(parsed.end/60), parsed.end%60,0,0);
+            if(shiftEnd < shiftStart) shiftEnd.setDate(shiftEnd.getDate()+1);
+            var shiftStart=new Date(brisbaneNow);
+            shiftStart.setHours(Math.floor(parsed.start/60), parsed.start%60,0,0);
+            if(brisbaneNow > shiftEnd){
+              continue; // Past today
+            }
+          }catch(e){}
+        }
+        allShifts.push({date:d, shift:sh, idx:i, fortnight:fn, iso:d.iso||''});
       }
     }
     allShifts.sort(function(a,b){ return (a.iso||'').localeCompare(b.iso||''); });
-    var reqs=safeGetJSON('retail_roster_requests_v2',[]); var myUsername=(safeGet('repco_username')||'').toLowerCase();
-    function hasPendingRequest(dateStr, iso){ for(var rr=0;rr<reqs.length;rr++){ var r=reqs[rr]; if(!r) continue; if(r.username && r.username.toLowerCase()!==myUsername) continue; if(r.status!=='pending') continue; if(r.shiftDate && dateStr && (r.shiftDate.indexOf(dateStr)!==-1 || dateStr.indexOf(r.shiftDate)!==-1)) return r; if(r.shiftISO && iso && r.shiftISO===iso) return r; } return null; }
-    // Determine current, upcoming, worked based on todayISO
-    var currentShift=null; var nextShift=null;
-    var upcoming=[]; var worked=[];
+    var htmlStr='';
+    // No header MY SCHEDULE - DUFFIELD etc as requested - removed
+    // No fortnight label 14 Days - 07/10 - 20/10 as requested - removed from cards
+    var currentShift=null;
+    var upcoming=[];
     for(var i=0;i<allShifts.length;i++){
       var s=allShifts[i];
       if(s.iso===todayISO){
-        var shiftStart=new Date(brisbaneNow); shiftStart.setHours(Math.floor(s.parsed.start/60), s.parsed.start%60,0,0);
-        var shiftEnd=new Date(brisbaneNow); shiftEnd.setHours(Math.floor(s.parsed.end/60), s.parsed.end%60,0,0);
+        var parsed=s.parsed||parseShiftRange(s.shift);
+        var shiftStart=new Date(brisbaneNow); shiftStart.setHours(Math.floor(parsed.start/60), parsed.start%60,0,0);
+        var shiftEnd=new Date(brisbaneNow); shiftEnd.setHours(Math.floor(parsed.end/60), parsed.end%60,0,0);
         if(shiftEnd < shiftStart) shiftEnd.setDate(shiftEnd.getDate()+1);
         if(brisbaneNow >= shiftStart && brisbaneNow <= shiftEnd){
           currentShift=s; currentShift.start=shiftStart; currentShift.end=shiftEnd;
         } else if(brisbaneNow < shiftStart){
           upcoming.push(s);
-          if(!nextShift) nextShift=s;
-        } else {
-          worked.push(s);
         }
-      } else if(s.iso){
-        if(s.iso < todayISO) worked.push(s);
-        else {
-          upcoming.push(s);
-          if(!nextShift) nextShift=s;
-        }
+      } else {
+        upcoming.push(s);
       }
     }
     if(currentShift){
-      var remaining=currentShift.end - brisbaneNow;
-      var totalMin=Math.floor(remaining/60000);
-      var h=Math.floor(totalMin/60); var m=totalMin%60;
-      var countdown=h>0 ? h+'h '+m+'m remaining' : m+'m remaining';
-      var progress=0;
-      try{
-        var total=currentShift.end - currentShift.start;
-        var elapsed=brisbaneNow - currentShift.start;
-        progress=Math.min(100, Math.max(0, (elapsed/total)*100));
-      }catch(e){}
-      htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+currentShift.idx+', \''+currentShift.date.date+' '+currentShift.date.day+'\', \''+currentShift.shift.replace(/\'/g, "\\'")+'\')"><div style="font-weight:900;font-size:12px">CURRENT SHIFT - TAP TO REQUEST EDIT (Today TUE 20/10 - Factual)</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+currentShift.date.day+' '+currentShift.date.date+' - '+fmt(currentShift.shift)+' ('+currentShift.fortnight.label+')</div><div style="font-weight:900;font-size:14px;color:#E30613">'+countdown+'</div><div style="margin-top:8px;background:#111;height:8px;border-radius:9999px;overflow:hidden"><div style="width:'+progress+'%;background:#E30613;height:100%"></div></div><div style="margin-top:6px"><span style="background:#111;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">TAP TO REQUEST CHANGE</span></div></div>';
-    } else {
-      // Check if today has shift but ended
-      var todayShiftFound=allShifts.find(function(s){ return s.iso===todayISO; });
-      if(todayShiftFound){
-        htmlStr+='<div class="card" style="background:#FFFBCC;border:3px solid #111"><div style="font-weight:900;font-size:12px">TODAY TUE 20/10 - '+fmt(todayShiftFound.shift)+' ('+todayShiftFound.fortnight.label+') - Shift ended or upcoming</div></div>';
+      var pendingReq=findRequestForShift(currentShift.date, currentShift.iso);
+      if(pendingReq){
+        var reqIdx=reqs.indexOf(pendingReq);
+        htmlStr+='<div class="card" style="background:#FFEB3B;border:3px solid #111"><div style="font-weight:900;font-size:12px">CURRENT SHIFT - PENDING APPROVAL</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+currentShift.date.day+' '+currentShift.date.date+' - '+fmt(currentShift.shift)+'</div><div style="font-size:11px">Requested: '+pendingReq.newShift+'<br>Reason: '+(pendingReq.reason||'')+'</div><div style="margin-top:8px;display:flex;gap:6px"><button onclick="editMyRequest('+reqIdx+')" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">EDIT REQUEST</button><button onclick="deleteMyRequest('+reqIdx+')" style="background:#E30613;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">CANCEL REQUEST</button></div></div>';
       } else {
-        htmlStr+='<div class="card" style="background:#fff;border:2px dashed #111"><div style="font-weight:900;font-size:12px">TODAY TUE 20/10 - OFF (No shift today across all fortnights)</div></div>';
+        var remaining=currentShift.end - brisbaneNow;
+        var totalMin=Math.floor(remaining/60000);
+        var h=Math.floor(totalMin/60); var m=totalMin%60;
+        var countdown=h>0 ? h+'h '+m+'m remaining' : m+'m remaining';
+        var progress=0;
+        try{
+          var total=currentShift.end - currentShift.start;
+          var elapsed=brisbaneNow - currentShift.start;
+          progress=Math.min(100, Math.max(0, (elapsed/total)*100));
+        }catch(e){}
+        htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+currentShift.idx+', \''+currentShift.date.date+' '+currentShift.date.day+'\', \''+currentShift.shift.replace(/\'/g, "\\'")+'\')"><div style="font-weight:900;font-size:12px">CURRENT SHIFT - TAP TO REQUEST EDIT</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+currentShift.date.day+' '+currentShift.date.date+' - '+fmt(currentShift.shift)+'</div><div style="font-weight:900;font-size:14px;color:#E30613">'+countdown+'</div><div style="margin-top:8px;background:#111;height:8px;border-radius:9999px;overflow:hidden"><div style="width:'+progress+'%;background:#E30613;height:100%"></div></div><div style="margin-top:6px"><span style="background:#111;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">TAP TO REQUEST CHANGE</span></div></div>';
       }
     }
-    if(nextShift && !currentShift && allShifts.length>0){
-      var until=0;
-      try{
-        var nsDate=new Date(nextShift.iso);
-        nsDate.setHours(Math.floor(nextShift.parsed.start/60), nextShift.parsed.start%60,0,0);
-        until=nsDate - brisbaneNow;
-        nextShift.start=nsDate;
-      }catch(e){}
-      var untilMin=Math.floor(until/60000);
-      var untilH=Math.floor(untilMin/60); var untilM=untilMin%60;
-      var untilD=Math.floor(untilH/24);
-      var untilTxt='';
-      if(untilD>0) untilTxt=untilD+'d '+ (untilH%24)+'h';
-      else if(untilH>0) untilTxt=untilH+'h '+untilM+'m';
-      else untilTxt=untilM+' minutes';
-      untilTxt='Starts in '+untilTxt;
-      htmlStr+='<div class="card" style="background:#FFF6CC;border:3px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+nextShift.idx+', \''+nextShift.date.date+' '+nextShift.date.day+'\', \''+nextShift.shift.replace(/\'/g, "\\'")+'\')"><div style="font-weight:900;font-size:12px">NEXT UP - TAP TO REQUEST EDIT (Factual)</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+nextShift.date.day+' '+nextShift.date.date+' - '+fmt(nextShift.shift)+' ('+nextShift.fortnight.label+')</div><div style="font-weight:900;font-size:12px">'+untilTxt+'</div><div style="margin-top:6px"><span style="background:#111;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px">TAP TO REQUEST CHANGE</span></div></div>';
-    }
-    if(allShifts.length>0){
-      htmlStr+='<div class="card" style="background:#111;color:#fff;font-weight:900">ALL ROSTERED SHIFTS ('+allShifts.length+') - ALL FORTNIGHTS - TAP A SHIFT TO REQUEST EDIT</div>';
-      for(var i=0;i<allShifts.length;i++){
-        var u=allShifts[i];
-        var isToday=u.iso===todayISO;
-        var bg=isToday ? '#B6F7C5' : '#fff';
-        var border=isToday ? '3px solid #E30613' : '2px solid #111';
-        htmlStr+='<div class="card" style="cursor:pointer;border:'+border+';background:'+bg+'" onclick="requestShiftCorrectionFromSchedule('+u.idx+', \''+u.date.date+' '+u.date.day+'\', \''+u.shift.replace(/\'/g, "\\'")+'\')"><b>'+u.date.day+' '+u.date.date+' ('+u.iso+')</b> - '+fmt(u.shift)+' - <small>'+u.fortnight.label+'</small><br><small style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px">TAP TO EDIT REQUEST</small>'+(isToday ? ' <span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px">TODAY TUE 20/10</span>' : '')+'</div>';
+    // Upcoming shifts only - no past, no ALL ROSTERED SHIFTS header as requested
+    if(upcoming.length>0){
+      htmlStr+='<div class="card" style="background:#111;color:#fff;font-weight:900">UPCOMING SHIFTS ('+upcoming.length+')</div>';
+      for(var i=0;i<upcoming.length;i++){
+        var u=upcoming[i];
+        var pending=findRequestForShift(u.date, u.iso);
+        if(pending){
+          var reqIdx=reqs.indexOf(pending);
+          htmlStr+='<div class="card" style="background:#FFEB3B;border:3px solid #111"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+'<br><span style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">PENDING APPROVAL: '+pending.newShift+'</span><br><small>'+(pending.reason||'')+'</small><div style="margin-top:6px;display:flex;gap:6px"><button onclick="editMyRequest('+reqIdx+')" style="background:#111;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">EDIT</button><button onclick="deleteMyRequest('+reqIdx+')" style="background:#E30613;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">CANCEL</button></div></div>';
+        } else {
+          htmlStr+='<div class="card" style="cursor:pointer;border:2px solid #111" onclick="requestShiftCorrectionFromSchedule('+u.idx+', \''+u.date.date+' '+u.date.day+'\', \''+u.shift.replace(/\'/g, "\\'")+'\')"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+'<br><small style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px">TAP TO REQUEST EDIT</small></div>';
+        }
       }
     } else {
-      htmlStr+='<div class="card">No rostered shifts found across all fortnights - OFF</div>';
-    }
-    if(worked.length>0){
-      htmlStr+='<div class="card" style="background:#E5E5E5;font-weight:900">WORKED SHIFTS ('+worked.length+') - Past</div>';
-      for(var i=0;i<worked.length;i++){
-        var w=worked[i];
-        htmlStr+='<div class="card" style="opacity:0.7"><b>'+w.date.day+' '+w.date.date+' ('+w.iso+')</b> - '+fmt(w.shift)+' - '+w.fortnight.label+' done</div>';
-      }
+      htmlStr+='<div class="card">No upcoming shifts - All caught up!</div>';
     }
     htmlStr+='<div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%;font-size:11px">BACK TO ROSTER</button></div>';
     el.innerHTML=htmlStr;
   }catch(e){
     console.error('renderMySchedule error', e);
     var el=document.getElementById('mysched-list');
-    if(el) el.innerHTML='<div class="card">Error: '+e.message+'</div><div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%">BACK</button></div>';
+    if(el) el.innerHTML='<div class="card">Error: '+e.message+'</div>';
   }
 }
 
@@ -2948,7 +3031,6 @@ function requestShiftCorrectionFromSchedule(idx, dateLabel, currentShift){
     }, 150);
   }catch(e){ console.error('requestShiftCorrectionFromSchedule error', e); toast('Error: '+e.message); }
 }
-
 
 function submitShiftCorrectionRequest(idx, dateLabel, oldShift, newShift, reason){
   try{
@@ -3103,9 +3185,30 @@ function renderBuddies(which){
       el.innerHTML=htmlStr; 
       return; 
     }
-    var buddies=[]; 
-    for(var sIdx=0;sIdx<cur.staff.length;sIdx++){
-      var s=cur.staff[sIdx];
+    var buddies=[];
+    var hiddenStaffList=safeGetJSON('retail_roster_hidden_staff_v1',[]);
+    // Hidden staff should appear in buddies if conditions met (shift overlaps), even though hidden from staff roster view
+    
+    // Include hidden staff that are in this fortnight (constant across rosters)
+    var allStaffForBuddies=cur.staff.slice();
+    for(var hsIdx=0;hsIdx<hiddenStaffList.length;hsIdx++){
+      var hs=hiddenStaffList[hsIdx];
+      if(!hs) continue;
+      var exists=allStaffForBuddies.find(function(s){ return s.username && s.username.toLowerCase()===hs.username.toLowerCase(); });
+      if(!exists){
+        // Try to find in this fortnight's staff (constant staff already added to roster)
+        var fnsAll=safeGetJSON('retail_roster_byFortnight_v1',[]);
+        for(var ff=0;ff<fnsAll.length;ff++){
+          var fnn=fnsAll[ff];
+          if(fnn.id===cur.id && fnn.staff){
+            var hsInFn=fnn.staff.find(function(s){ return s.username && s.username.toLowerCase()===hs.username.toLowerCase(); });
+            if(hsInFn) allStaffForBuddies.push(hsInFn);
+          }
+        }
+      }
+    }
+    for(var sIdx=0;sIdx<allStaffForBuddies.length;sIdx++){
+      var s=allStaffForBuddies[sIdx];
       if(!s || !s.firstName) continue; 
       if(s.lastName===myStaff.lastName && s.firstName===myStaff.firstName) continue; 
       var sh=(s && s.shifts && s.shifts[idx]!=null) ? s.shifts[idx] : 'OFF'; 
@@ -3289,42 +3392,7 @@ function changePassword(){
 
 
 
-function renderUnavailable(){
-  var el=document.getElementById('unavail-list');
-  if(!el) return;
-  var cur=getSelectedFortnight(); if(!cur) cur=getCurrentFortnight();
-  if(!cur){ el.innerHTML='<div class="card">No roster</div>'; return; }
-  var html='<div class="card" style="padding:10px;background:#111;color:#fff;font-weight:900">STAFF UNAVAILABLE - '+cur.label+'</div>';
-  var hasAny=false;
-  cur.staff.forEach(function(st){
-    var unavailDays=[];
-    for(var i=0;i<cur.dates.length;i++){
-      var isUA=st.unavailable && st.unavailable[i];
-      var sh=st.shifts[i];
-      if(isUA || (sh && (sh.toUpperCase()==='NA' || sh.toUpperCase()==='UA'))){
-        unavailDays.push(cur.dates[i].day+' '+cur.dates[i].date+' - '+(st.originalShifts && st.originalShifts[i] ? st.originalShifts[i]+' -> NA' : 'NA'));
-      }
-    }
-    if(unavailDays.length>0){
-      hasAny=true;
-      html+='<div class="card" style="padding:8px"><div style="font-weight:900;font-size:11px">'+st.lastName+', '+st.firstName+'</div><div style="font-size:10px">'+unavailDays.join('<br>')+'</div></div>';
-    }
-  });
-  if(!hasAny){
-    html+='<div class="card" style="padding:10px">No staff unavailable in this fortnight<br><br>When admin approves a NA request, it will appear here.</div>';
-  }
-  // Also show approved requests that are NA
-  var reqs=safeGetJSON('retail_roster_requests_v2',[]);
-  var approvedNA=reqs.filter(function(r){ return r && r.status==='approved' && r.newShift && r.newShift.toUpperCase()==='NA'; });
-  if(approvedNA.length>0){
-    html+='<div class="card" style="padding:10px;background:#FFF6CC;font-weight:900">APPROVED UNAVAILABLE REQUESTS</div>';
-    approvedNA.forEach(function(r){
-      html+='<div class="card" style="padding:8px;background:#B6F7C5"><div style="font-size:11px;font-weight:900">'+r.username+' - '+r.shiftDate+'</div><div style="font-size:10px">Reason: '+r.reason+'<br>Approved: '+new Date(r.approvedTs||r.ts).toLocaleString()+'</div></div>';
-    });
-  }
-  html+='<div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%;font-size:11px">BACK</button></div>';
-  el.innerHTML=html;
-}
+
 
 
 function applyRoleVisibility(){
@@ -3380,35 +3448,8 @@ function closeAdmin(){ const m=document.getElementById("admin-modal"); if(m){ m.
 document.addEventListener('keydown', function(e){ if(e.key==='Escape'){ const m=document.getElementById('admin-modal'); if(m && m.style.display==='flex') closeAdmin(); } });
 
 
-function renderUnavailablePage(){
-  try{
-    var el=document.getElementById('unavail-list');
-    if(!el) return;
-    var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
-    var reqs=safeGetJSON('retail_roster_requests_v2',[]);
-    var html='<div class="card" style="background:#111;color:#fff;font-weight:900">STAFF UNAVAILABLE - Approved Requests + Roster NA</div>';
-    var approved=reqs.filter(function(r){ return r && r.status==='approved' && (r.type==='unavailability' || (r.newShift && ['NA','UA','UNAVAILABLE'].includes(r.newShift.toUpperCase()))); });
-    if(approved.length>0){
-      html+='<div class="card" style="padding:10px;background:#FFFBCC;border:2px solid #111"><b>APPROVED UNAVAILABLE REQUESTS ('+approved.length+')</b></div>';
-      for(var i=0;i<approved.length;i++){ var r=approved[i]; html+='<div class="card" style="padding:8px;background:#fff;border:2px solid #111"><b>'+(r.username||'')+'</b> - '+(r.shiftDate||'')+'<br>Old: '+(r.oldShift||'')+' -> New: '+(r.newShift||'')+'<br>Reason: '+(r.reason||'')+'<br>Approved: '+new Date(r.approvedTs||r.ts).toLocaleString()+'</div>'; }
-    }
-    var cur=getSelectedFortnight(); if(!cur) cur=getCurrentFortnight();
-    if(cur){
-      html+='<div class="card" style="padding:10px;background:#D6EEFF;border:2px solid #111"><b>CURRENT ROSTER UNAVAILABLE - '+cur.label+'</b></div>';
-      cur.staff.forEach(function(st){
-        var na=[];
-        for(var idx=0;idx<cur.dates.length;idx++){
-          if(st.unavailable && st.unavailable[idx]){ na.push(cur.dates[idx].day+' '+cur.dates[idx].date+' ('+(st.originalShifts && st.originalShifts[idx] ? st.originalShifts[idx] : st.shifts[idx])+')'); }
-          else if(st.shifts[idx] && ['NA','UA','UNAVAILABLE'].includes(st.shifts[idx].toUpperCase())){ na.push(cur.dates[idx].day+' '+cur.dates[idx].date+' ('+st.shifts[idx]+')'); }
-        }
-        if(na.length>0) html+='<div class="card" style="padding:8px"><b>'+st.lastName.toUpperCase()+', '+st.firstName+'</b><br>'+na.join(', ')+'</div>';
-      });
-    }
-    html+='<div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%">BACK</button></div>';
-    el.innerHTML=html;
-  }catch(e){ console.error(e); }
-}
-function renderUnavailable(){ return renderUnavailablePage(); }
+
+
 
 
 function updateRequestsBadge(){
@@ -3652,6 +3693,80 @@ function editMyRequest(idx){
       }
     },150);
   }catch(e){ toast('Error: '+e.message); }
+}
+
+
+
+function renderUnavailablePage(){
+  try{
+    var el=document.getElementById('unavail-list');
+    if(!el) return;
+    var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+    var reqs=safeGetJSON('retail_roster_requests_v2',[]);
+    var html='<div class="card" style="background:#111;color:#fff;font-weight:900">STAFF UNAVAILABLE - ALL ROSTERS - ONLY UA/Unavailable</div>';
+    html+='<div class="card" style="padding:8px;background:#FFF6CC;border:2px solid #111;font-size:11px">Showing ALL staff marked as UA/Unavailable across ALL fortnights (not restricted to current/future)</div>';
+    // Approved UA requests
+    var approved=reqs.filter(function(r){ return r && r.status==='approved' && (r.type==='unavailability' || (r.newShift && ['NA','UA','UNAVAILABLE'].includes(r.newShift.toUpperCase()))); });
+    if(approved.length>0){
+      html+='<div class="card" style="padding:10px;background:#FFFBCC;border:2px solid #111"><b>APPROVED UNAVAILABLE REQUESTS ('+approved.length+') - ALL DATES</b></div>';
+      approved.sort(function(a,b){ return (b.approvedTs||b.ts||0)-(a.approvedTs||a.ts||0); });
+      for(var i=0;i<approved.length;i++){ var r=approved[i]; html+='<div class="card" style="padding:8px;background:#fff;border:2px solid #111"><b>'+(r.username||'')+'</b> - '+(r.shiftDate||'')+' ('+(r.shiftISO||'')+')<br>Old: '+(r.oldShift||'')+' -> New: '+(r.newShift||'')+'<br>Reason: '+(r.reason||'')+'<br>Approved: '+new Date(r.approvedTs||r.ts).toLocaleString()+(r.approvedBy ? ' by '+r.approvedBy : '')+'</div>'; }
+    }
+    // All rosters - ONLY UA/Unavailable
+    if(fns.length===0){
+      html+='<div class="card" style="padding:10px">No rosters loaded</div>';
+    } else {
+      var sortedFns=fns.slice().sort(function(a,b){ if(!a.dates||!b.dates||!a.dates[0]||!b.dates[0]) return 0; return a.dates[0].iso.localeCompare(b.dates[0].iso); });
+      var staffMap={};
+      // Collect all UA across all fortnights
+      for(var f=0;f<sortedFns.length;f++){
+        var fn=sortedFns[f];
+        if(!fn.dates||!fn.staff) continue;
+        for(var s=0;s<fn.staff.length;s++){
+          var st=fn.staff[s];
+          if(!st||st.hidden) continue; // Hide hidden staff from this page? Keep hidden? Show only non-hidden
+          var key=(st.username|| (st.firstName+'_'+st.lastName)).toLowerCase();
+          if(!staffMap[key]) staffMap[key]={staff:st, entries:[]};
+          for(var idx=0;idx<fn.dates.length;idx++){
+            var isUA=false;
+            var label='';
+            if(st.unavailable && st.unavailable[idx]){
+              isUA=true;
+              label=fn.dates[idx].day+' '+fn.dates[idx].date+' ('+fn.dates[idx].iso+') - '+fn.label+' - '+(st.originalShifts && st.originalShifts[idx] ? st.originalShifts[idx]+' -> NA' : 'NA (unavailable flag)');
+            } else if(st.shifts[idx] && ['NA','UA','UNAVAILABLE'].includes(st.shifts[idx].toUpperCase())){
+              isUA=true;
+              label=fn.dates[idx].day+' '+fn.dates[idx].date+' ('+fn.dates[idx].iso+') - '+fn.label+' - '+st.shifts[idx];
+            }
+            if(isUA){
+              staffMap[key].entries.push({label:label, iso:fn.dates[idx].iso, fortnight:fn.label, date:fn.dates[idx]});
+            }
+          }
+        }
+      }
+      var hasAny=false;
+      var keys=Object.keys(staffMap).sort();
+      for(var k=0;k<keys.length;k++){
+        var entry=staffMap[keys[k]];
+        if(entry.entries.length===0) continue;
+        hasAny=true;
+        entry.entries.sort(function(a,b){ return (a.iso||'').localeCompare(b.iso||''); });
+        var st=entry.staff;
+        var name=(st.lastName?st.lastName.toUpperCase()+', ':'')+(st.firstName||'')+' ('+(st.username||'')+')';
+        html+='<div class="card" style="padding:10px"><div style="font-weight:900;font-size:11px">'+name+' - UA/Unavailable ('+entry.entries.length+' days)</div><div style="font-size:10px;margin-top:6px">'+entry.entries.map(function(e){ return e.label; }).join('<br>')+'</div></div>';
+      }
+      if(!hasAny){
+        html+='<div class="card" style="padding:10px">No staff currently marked as UA/Unavailable across any roster<br><br>Staff with NA/UA in any fortnight will appear here regardless of current/future dates.</div>';
+      } else {
+        html+='<div class="card" style="padding:8px;background:#E5E5E5;font-size:10px;font-weight:900">Total staff with UA: '+Object.keys(staffMap).filter(function(k){ return staffMap[k].entries.length>0; }).length+' | Total UA entries: '+Object.keys(staffMap).reduce(function(acc,k){ return acc+staffMap[k].entries.length; },0)+' across '+sortedFns.length+' fortnights</div>';
+      }
+    }
+    html+='<div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%">BACK</button></div>';
+    el.innerHTML=html;
+  }catch(e){ console.error(e); el.innerHTML='<div class="card">Error: '+e.message+'</div>'; }
+}
+function renderUnavailable(){
+  // Alias to new function for compatibility
+  return renderUnavailablePage();
 }
 
 </script>
