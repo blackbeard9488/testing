@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_LEFTOVER_V98";
+const BUILD_ID="20261022690000_FIX_ALL_USERS_V100";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -2685,6 +2685,323 @@ function adminAddUserMgmt(){
   },500);
 }
 
+
+function adminEditUser(idx){ 
+  let users=safeGetJSON('retail_roster_users_v1',[]); 
+  const u=users[idx]; 
+  if(!u) return; 
+  showCustomPrompt('Edit User', '<div style="display:flex;flex-direction:column;gap:8px"><input id="edit-u-name" value="'+u.username+'" style="padding:10px;border-radius:9999px;border:2px solid #111"><input id="edit-u-pass" placeholder="New password (blank to keep)" type="password" style="padding:10px;border-radius:9999px;border:2px solid #111"><select id="edit-u-role" style="padding:10px;border-radius:9999px;border:2px solid #111"><option value="staff" '+(u.role==='staff'?'selected':'')+'>staff</option><option value="manager" '+(u.role==='manager'?'selected':'')+'>manager</option><option value="admin" '+(u.role==='admin'?'selected':'')+'>admin</option><option value="master" '+(u.role==='master'?'selected':'')+'>master</option></select><input id="edit-u-first" value="'+(u.firstName||'')+'" placeholder="First Name" style="padding:10px;border-radius:9999px;border:2px solid #111"><input id="edit-u-last" value="'+(u.lastName||'')+'" placeholder="Last Name" style="padding:10px;border-radius:9999px;border:2px solid #111"></div>', (ok)=>{ 
+    if(!ok) return; 
+    const nu=(document.getElementById('edit-u-name')?.value||'').trim(); 
+    const np=(document.getElementById('edit-u-pass')?.value||'').trim(); 
+    const nr=document.getElementById('edit-u-role')?.value||u.role; 
+    const nf=(document.getElementById('edit-u-first')?.value||'').trim(); 
+    const nl=(document.getElementById('edit-u-last')?.value||'').trim(); 
+    if(nu) u.username=nu; 
+    if(np) u.password=np; 
+    if(nr) u.role=nr; 
+    if(nf) u.firstName=nf;
+    if(nl) u.lastName=nl;
+    safeSetJSON('retail_roster_users_v1',users); 
+    try{ 
+      let curU=(safeGet('repco_username')||'').toLowerCase(); 
+      if(u && u.username.toLowerCase()===curU){ 
+        document.body.classList.remove('is-admin','staff-view'); 
+        if((nr||'').toLowerCase()==='manager'||(nr||'').toLowerCase()==='admin'){document.body.classList.add('is-admin');}else{document.body.classList.add('staff-view');}; 
+        safeSet('repco_currentRole', (nr||u.role||'').toLowerCase()); 
+      } 
+    }catch(e){} 
+    toast('Updated '+u.username+' - syncing live'); 
+    renderAccountMgmtPage(); 
+    applyRoleVisibility(); 
+    setTimeout(function(){
+      try{
+        var state=getAllState();
+        state._ts=Date.now();
+        state._lastUserEditId=u.username;
+        state._lastUserEditTs=Date.now();
+        function pushWithFallback(url, body, label){
+          console.log('LIVE USER EDIT: Pushing', label);
+          fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:body,mode:'cors',cache:'no-store'}).then(function(res){
+            console.log('LIVE USER EDIT: REST', label, res.ok, res.status);
+            if(!res.ok){
+              fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ console.log('LIVE USER EDIT: no-cors sent', label); safeSet('repco_cloud_ts', String(state._ts)); });
+            } else {
+              safeSet('repco_cloud_ts', String(state._ts));
+            }
+          }).catch(function(e){
+            try{ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }); }catch(e2){}
+          });
+        }
+        if(typeof db!=='undefined' && db && db.ref){
+          db.ref('repco_state').set(state).then(function(){
+            console.log('LIVE USER EDIT: SDK OK - username/password synced live');
+            safeSet('repco_cloud_ts', String(state._ts));
+            toast('Live: User updated on all devices');
+          }).catch(function(err){
+            pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
+          });
+        } else {
+          pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
+        }
+        try{
+          pushWithFallback(FIREBASE_DB_URL+'/retail_roster_users_v1.json', JSON.stringify(users), 'users_v1');
+        }catch(e){}
+        if(typeof BroadcastChannel!=='undefined'){
+          try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'user_edit', users:users, ts:Date.now()}); }catch(e){}
+        }
+      }catch(e){ console.error('LIVE USER EDIT error', e); }
+    },500);
+  }); 
+}
+
+function adminDelUser(idx){ 
+  let users=safeGetJSON('retail_roster_users_v1',[]); 
+  if(!users[idx]) return; 
+  showCustomConfirm('Delete user?', users[idx].username, (ok)=>{ 
+    if(!ok) return; 
+    if(users.length<=1){ toast('Cannot delete last user'); return; } 
+    var deletedName=users[idx].username; 
+    users.splice(idx,1); 
+    safeSetJSON('retail_roster_users_v1',users); 
+    toast('Deleted - syncing live'); 
+    renderAccountMgmtPage(); 
+    setTimeout(function(){
+      try{
+        var state=getAllState();
+        state._ts=Date.now();
+        state._lastUserDelete=deletedName;
+        function pushWithFallback(url, body, label){
+          fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:body,mode:'cors',cache:'no-store'}).then(function(res){
+            if(!res.ok){ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }); }
+            else { safeSet('repco_cloud_ts', String(state._ts)); }
+          }).catch(function(){ try{ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }); }catch(e){} });
+        }
+        if(typeof db!=='undefined' && db && db.ref){
+          db.ref('repco_state').set(state).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); toast('Live: User deleted on all devices'); }).catch(function(){ pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state'); });
+        } else {
+          pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
+        }
+        try{ pushWithFallback(FIREBASE_DB_URL+'/retail_roster_users_v1.json', JSON.stringify(users), 'users_v1'); }catch(e){}
+      }catch(e){ console.error('LIVE USER DELETE error', e); }
+    },500);
+  }); 
+}
+
+function getPublicHolidays(){ return safeGetJSON('retail_roster_public_holidays_v1',[]); }
+
+function getPublicHolidayForDate(iso, dateLabel){
+  var holidays=getPublicHolidays();
+  for(var i=0;i<holidays.length;i++){
+    var h=holidays[i];
+    if(!h) continue;
+    if(h.dateISO && iso && h.dateISO===iso) return h;
+    if(h.dateLabel && dateLabel && (h.dateLabel===dateLabel || h.dateLabel===iso)) return h;
+    if(h.dateISO && dateLabel && h.dateISO===dateLabel) return h;
+  }
+  return null;
+}
+
+function getPublicHolidayIcon(iso, dateLabel){
+  var ph=getPublicHolidayForDate(iso, dateLabel);
+  if(ph) return {icon:'🎉', name:ph.name||'Public Holiday', ph:ph};
+  return null;
+}
+
+
+
+function isPublicHolidayDate(iso){
+  var holidays=getPublicHolidays();
+  for(var i=0;i<holidays.length;i++){
+    if(holidays[i] && holidays[i].dateISO===iso) return true;
+  }
+  return false;
+}
+
+function applyPublicHolidaysToAllRosters(){
+  try{
+    var holidays=getPublicHolidays();
+    if(holidays.length===0) return;
+    var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+    var changed=false;
+    for(var f=0;f<fns.length;f++){
+      var fn=fns[f];
+      if(!fn.dates) continue;
+      for(var d=0;d<fn.dates.length;d++){
+        var dateObj=fn.dates[d];
+        var iso=dateObj.iso;
+        var holiday=getPublicHolidayForDate(iso, dateObj.date);
+        if(!holiday) continue;
+        // For this date, mark staff not listed as OFF
+        var allowedUsernames={};
+        (holiday.staffAllocations||[]).forEach(function(sa){
+          if(sa.username) allowedUsernames[sa.username.toLowerCase()]=true;
+          if(sa.firstName && sa.lastName){
+            var key=(sa.firstName+'_'+sa.lastName).toLowerCase();
+            allowedUsernames[key]=true;
+            allowedUsernames[(sa.firstName+' '+sa.lastName).toLowerCase()]=true;
+          }
+        });
+        for(var s=0;s<fn.staff.length;s++){
+          var st=fn.staff[s];
+          if(!st) continue;
+          var staffKey=(st.username||'').toLowerCase();
+          var fullKey=(st.firstName+'_'+st.lastName).toLowerCase();
+          var fullSpace=(st.firstName+' '+st.lastName).toLowerCase();
+          if(allowedUsernames[staffKey] || allowedUsernames[fullKey] || allowedUsernames[fullSpace]){
+            // Staff is listed on public holiday - set their allocated shift/area
+            var alloc=(holiday.staffAllocations||[]).find(function(sa){
+              return (sa.username && st.username && sa.username.toLowerCase()===st.username.toLowerCase()) ||
+                     (sa.firstName && sa.lastName && st.firstName && st.lastName && sa.firstName.toLowerCase()===st.firstName.toLowerCase() && sa.lastName.toLowerCase()===st.lastName.toLowerCase());
+            });
+            if(alloc){
+              if(!st.originalShifts) st.originalShifts=[];
+              if(!st.originalShifts[d]) st.originalShifts[d]=st.shifts[d];
+              if(alloc.shift) st.shifts[d]=alloc.shift;
+              if(alloc.area){
+                if(!st.publicHolidayAreas) st.publicHolidayAreas=[];
+                st.publicHolidayAreas[d]=alloc.area;
+              }
+            }
+          } else {
+            // Staff NOT listed - mark as OFF automatically
+            if(!st.originalShifts) st.originalShifts=[];
+            if(!st.originalShifts[d] && st.shifts[d] && st.shifts[d].toUpperCase()!=='OFF'){
+              st.originalShifts[d]=st.shifts[d];
+            }
+            if(st.shifts[d] && st.shifts[d].toUpperCase()!=='OFF'){
+              st.shifts[d]='OFF';
+              changed=true;
+            }
+          }
+        }
+      }
+    }
+    if(changed){
+      safeSetJSON('retail_roster_byFortnight_v1', fns);
+      console.log('Public holidays applied - unlisted staff set to OFF');
+    }
+  }catch(e){ console.error('applyPublicHolidays error', e); }
+}
+
+function renderPublicHolidayPage(){
+  try{
+    var el=document.getElementById('public-holiday-inner');
+    if(!el){
+      console.error('public-holiday-inner not found');
+      // Try again after short delay
+      setTimeout(function(){ try{ renderPublicHolidayPage(); }catch(e){} }, 500);
+      return;
+    }
+    var holidays=[];
+    try{ holidays=getPublicHolidays(); }catch(e){ holidays=safeGetJSON('retail_roster_public_holidays_v1',[]); }
+    var fns=[];
+    try{ fns=safeGetJSON('retail_roster_byFortnight_v1',[]); }catch(e){}
+    var cur=null;
+    try{ cur=getSelectedFortnight(); if(!cur) cur=getCurrentFortnight(); }catch(e){}
+    var html='';
+    html+='<div class="card" style="background:#111;color:#fff;font-weight:900;padding:12px">PUBLIC HOLIDAYS - Create & Manage<br><small style="font-weight:400">Select staff, times and areas for a date. Unlisted staff on that date automatically OFF. Live sync to all devices.</small></div>';
+    html+='<div class="card" style="padding:12px"><button onclick="openCreatePublicHolidayModal()" style="background:#E30613;color:#fff;border:none;border-radius:9999px;padding:10px 16px;font-weight:900;width:100%">+ CREATE PUBLIC HOLIDAY</button></div>';
+    if(holidays.length===0){
+      html+='<div class="card" style="padding:12px">No public holidays created yet<br><small>Click + CREATE to add one. You can create multiple public holidays.</small></div>';
+    } else {
+      holidays.sort(function(a,b){ return (a.dateISO||'').localeCompare(b.dateISO||''); });
+      for(var i=0;i<holidays.length;i++){
+        var h=holidays[i];
+        if(!h) continue;
+        var staffCount=(h.staffAllocations||[]).length;
+        var staffListHtml='';
+        try{
+          staffListHtml=(h.staffAllocations||[]).map(function(sa){ return (sa.lastName||'')+', '+(sa.firstName||'')+' - '+(sa.shift||'OFF')+' '+(sa.area?'['+sa.area+']':''); }).join('<br>');
+        }catch(e){ staffListHtml='Error loading staff'; }
+        html+='<div class="card" style="padding:12px;border:3px solid #111"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><div><div style="font-weight:900;font-size:14px">'+(h.name||'Public Holiday')+' - '+(h.dateLabel||h.dateISO||'')+'</div><div style="font-size:11px;color:#666">Date: '+(h.dateISO||'')+' ('+(h.dateLabel||'')+') - Staff: '+staffCount+' allocated, others OFF</div><div style="font-size:10px;margin-top:4px">'+staffListHtml+'</div></div><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="editPublicHoliday(\''+h.id+'\')" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">EDIT</button><button onclick="deletePublicHoliday(\''+h.id+'\')" style="background:#E30613;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">DELETE</button></div></div></div>';
+      }
+    }
+    html+='<div class="card" style="padding:10px;background:#FFF6CC;border:2px solid #111"><b>How it works (LIVE):</b><br><small>1. Create public holiday with date and select staff with times/areas<br>2. Any staff NOT listed for that date automatically marked OFF (original shift saved)<br>3. Changes sync live to all devices via Firebase<br>4. Delete public holiday restores original shifts for all staff on that date<br>5. Same shift shows on buddies pages, My Schedule shows 🎉 icon for PH date</small></div>';
+    html+='<div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:10px 14px;font-weight:900;width:100%">← BACK TO ROSTER</button></div>';
+    el.innerHTML=html;
+  }catch(e){
+    console.error('renderPublicHolidayPage error', e);
+    var el2=document.getElementById('public-holiday-inner');
+    if(el2) el2.innerHTML='<div class="card" style="background:#FFEB3B;padding:12px">Error loading public holidays: '+e.message+'<br><button onclick="renderPublicHolidayPage()" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;margin-top:8px">RETRY</button></div>';
+  }
+}
+
+var tempPublicHolidayStaff=[];
+
+function openCreatePublicHolidayModal(editId){
+  try{
+    var holidays=getPublicHolidays();
+    var editing=null;
+    if(editId){
+      editing=holidays.find(function(h){ return h.id===editId; });
+    }
+    tempPublicHolidayStaff=editing && editing.staffAllocations ? JSON.parse(JSON.stringify(editing.staffAllocations)) : [];
+    var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+    var allStaffMap={};
+    for(var f=0;f<fns.length;f++){
+      var fn=fns[f];
+      if(!fn.staff) continue;
+      for(var s=0;s<fn.staff.length;s++){
+        var st=fn.staff[s];
+        var key=(st.username|| (st.firstName+'_'+st.lastName)).toLowerCase();
+        if(!allStaffMap[key]) allStaffMap[key]=st;
+      }
+    }
+    var allStaff=Object.values(allStaffMap).sort(function(a,b){ return (a.lastName||'').localeCompare(b.lastName||''); });
+    var staffOptions=allStaff.map(function(st){ return '<option value="'+(st.username||'')+'" data-first="'+(st.firstName||'')+'" data-last="'+(st.lastName||'')+'">'+(st.lastName||'')+', '+(st.firstName||'')+' ('+(st.username||'')+')</option>'; }).join('');
+    var areas=['Counter','Workshop','Office','Delivery','Stock','Front','Back','Other'];
+    var areaOptions=areas.map(function(a){ return '<option value="'+a+'">'+a+'</option>'; }).join('');
+    var modalHtml='<div style="font-size:11px"><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label style="font-weight:900;font-size:9px">DATE (ISO e.g. 2026-01-26)</label><input id="ph-date-iso" type="date" value="'+(editing?editing.dateISO:'')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111"></div><div><label style="font-weight:900;font-size:9px">PUBLIC HOLIDAY NAME</label><input id="ph-name" placeholder="e.g. Australia Day" value="'+(editing?editing.name:'')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111"></div></div><div style="margin-top:12px"><label style="font-weight:900;font-size:11px">ALLOCATE STAFF FOR THIS PUBLIC HOLIDAY</label><div style="margin-top:8px;display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:6px;align-items:end"><div><label style="font-size:9px">Staff</label><select id="ph-staff-select" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px"><option value="">Select staff</option>'+staffOptions+'</select></div><div><label style="font-size:9px">Times e.g. 08:00-16:00</label><input id="ph-shift" placeholder="08:00-16:30" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px"></div><div><label style="font-size:9px">Area</label><select id="ph-area" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px"><option value="">Area</option>'+areaOptions+'</select></div><div><button onclick="addPublicHolidayStaffRow()" style="background:#111;color:#fff;border-radius:9999px;padding:6px 10px;font-weight:900;font-size:10px">ADD</button></div></div><div id="ph-staff-list" style="margin-top:10px;max-height:200px;overflow:auto"></div></div><div style="margin-top:8px;font-size:9px;color:#666">Staff NOT listed will automatically be OFF on this date. Original shifts saved and restored if holiday deleted.</div></div>';
+    showCustomConfirm(editing?'Edit Public Holiday: '+(editing.name||editing.dateISO):'Create Public Holiday', modalHtml, function(confirmed){
+      if(!confirmed) return;
+      var dateIso=document.getElementById('ph-date-iso')?.value||'';
+      var name=document.getElementById('ph-name')?.value.trim()||'Public Holiday';
+      if(!dateIso){ toast('Select date'); setTimeout(function(){ openCreatePublicHolidayModal(editId); },300); return; }
+      var dateObj=new Date(dateIso);
+      var dateLabel=String(dateObj.getDate()).padStart(2,'0')+'/'+String(dateObj.getMonth()+1).padStart(2,'0');
+      var holidays=getPublicHolidays();
+      if(editing){
+        editing.dateISO=dateIso;
+        editing.dateLabel=dateLabel;
+        editing.name=name;
+        editing.staffAllocations=tempPublicHolidayStaff.slice();
+        editing.updatedTs=Date.now();
+      } else {
+        var newHoliday={
+          id:'ph_'+Date.now()+'_'+Math.random().toString(36).substr(2,6),
+          dateISO:dateIso,
+          dateLabel:dateLabel,
+          name:name,
+          staffAllocations:tempPublicHolidayStaff.slice(),
+          createdBy:safeGet('repco_username')||'admin',
+          ts:Date.now()
+        };
+        holidays.push(newHoliday);
+      }
+      safeSetJSON('retail_roster_public_holidays_v1', holidays);
+      try{ localStorage.setItem('retail_roster_public_holidays_update_ts', String(Date.now())); }catch(e){}
+      applyPublicHolidaysToAllRosters();
+      renderPublicHolidayPage();
+      renderRosterSafe();
+      try{ debouncedCloudSave(); cloudSave(); }catch(e){}
+      // Immediate cloud push for LIVE
+      setTimeout(function(){
+        try{
+          var state=getAllState();
+          if(state && typeof db!=='undefined' && db && db.ref){
+            db.ref('repco_state').set(state).then(function(){ toast('Public holiday synced LIVE - unlisted staff now OFF'); });
+          } else if(typeof FIREBASE_DB_URL!=='undefined'){
+            fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
+          }
+        }catch(e){}
+      },500);
+      toast((editing?'Updated':'Created')+' public holiday '+dateLabel+' - '+(tempPublicHolidayStaff.length)+' staff allocated, others OFF');
+    });
+    setTimeout(function(){ renderTempPublicHolidayStaffList(); },150);
+  }catch(e){ console.error(e); toast('Error: '+e.message); }
+}
+
 function renderTempPublicHolidayStaffList(){
   var el=document.getElementById('ph-staff-list');
   if(!el) return;
@@ -2707,32 +3024,21 @@ function addPublicHolidayStaffRow(){
     var area=document.getElementById('ph-area');
     if(!sel || !sel.value){ toast('Select staff'); return; }
     var opt=sel.options[sel.selectedIndex];
-    if(!opt || opt.value===''){ toast('Select staff'); return; }
     var first=opt.getAttribute('data-first')||'';
     var last=opt.getAttribute('data-last')||'';
-    var username=opt.getAttribute('data-username')||sel.value||'';
-    var key=sel.value||'';
+    var username=sel.value||'';
     var shiftVal=(shift?.value||'').trim()||'08:00-16:30';
     var areaVal=(area?.value||'').trim()||'';
-    // Check duplicate by username or by first+last
-    if(tempPublicHolidayStaff.find(function(sa){ 
-      var saUser=(sa.username||'').toLowerCase();
-      var checkUser=(username||'').toLowerCase();
-      if(saUser && checkUser && saUser===checkUser) return true;
-      if(sa.firstName && sa.lastName && first && last){
-        if(sa.firstName.toLowerCase()===first.toLowerCase() && sa.lastName.toLowerCase()===last.toLowerCase()) return true;
-      }
-      return false;
-    })){
+    // Check duplicate
+    if(tempPublicHolidayStaff.find(function(sa){ return sa.username && username && sa.username.toLowerCase()===username.toLowerCase(); })){
       toast('Staff already added'); return;
     }
-    tempPublicHolidayStaff.push({firstName:first,lastName:last,username:username||key,shift:shiftVal,area:areaVal,key:key});
+    tempPublicHolidayStaff.push({firstName:first,lastName:last,username:username,shift:shiftVal,area:areaVal});
     renderTempPublicHolidayStaffList();
     if(sel) sel.value='';
     if(shift) shift.value='';
     if(area) area.value='';
-    toast('Added: '+last+', '+first+' - '+shiftVal+' '+(areaVal?'['+areaVal+']':''));
-  }catch(e){ toast('Error: '+e.message); console.error(e); }
+  }catch(e){ toast('Error: '+e.message); }
 }
 
 function removeTempPublicHolidayStaff(idx){
@@ -2806,6 +3112,10 @@ window.addPublicHolidayStaffRow=addPublicHolidayStaffRow;
 window.removeTempPublicHolidayStaff=removeTempPublicHolidayStaff;
 window.applyPublicHolidaysToAllRosters=applyPublicHolidaysToAllRosters;
 window.getPublicHolidayForDate=getPublicHolidayForDate;
+
+
+
+
 
 
 function renderHiddenStaffPage(){
