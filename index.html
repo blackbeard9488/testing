@@ -580,7 +580,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022490000_FIX_SYNTAX2_V53";
+const BUILD_ID="20261022480000_FIX_DENIED_NO_FILTER_V52";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -2783,13 +2783,13 @@ function denyReq(i){
   try{
     let reqs=safeGetJSON('retail_roster_requests_v2',[]);
     let r=reqs[i];
-    if(!r) { console.error('denyReq: no request at', i); return; }
+    if(!r) return;
+    var oldShift=r.oldShift||'';
     var reqId=r.id;
     var reqDate=r.shiftDate||'';
     var reqIso=r.shiftISO||'';
     var reqIdx=r.shiftIdx;
     var reqUser=r.username||'';
-    console.log('DENY START: Denying request', reqId, 'user', reqUser, 'date', reqDate);
     function extractDateKeyD(str){
       if(!str) return '';
       var m=str.match(/(\d{1,2}\/\d{1,2})/);
@@ -2802,14 +2802,15 @@ function denyReq(i){
       return '';
     }
     var reqDateKey=extractDateKeyD(reqDate)||extractDateKeyD(reqIso);
+    // Mark as denied - LIVE
     r.status='denied';
     r.readByStaff=false;
     r.readByAdmin=true;
     r.deniedBy=safeGet('repco_username')||'admin';
     r.deniedTs=Date.now();
     r.livePushTs=Date.now();
-    r.forceLiveSync=true;
-    console.log('DENY: Marked as denied, ts', r.deniedTs);
+    r.forceLiveSync=true; // Flag for live sync
+    // Remove ANY pending for same user+date
     for(var j=reqs.length-1;j>=0;j--){
       if(j===i) continue;
       var other=reqs[j];
@@ -2821,111 +2822,82 @@ function denyReq(i){
          (other.shiftDate===reqDate) || 
          (other.shiftISO && reqIso && other.shiftISO===reqIso) || 
          (typeof other.shiftIdx==='number' && typeof reqIdx==='number' && other.shiftIdx===reqIdx)){
-        console.log('DENY: Removing duplicate pending', other.id);
+        console.log('LIVE DENY: Removing duplicate pending for same date:', other.id);
         reqs.splice(j,1);
         if(j<i) i--;
       }
     }
     safeSetJSON('retail_roster_requests_v2',reqs);
     try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
-    try{ localStorage.setItem('repco_last_denied_'+reqId, JSON.stringify({id:reqId, user:reqUser, date:reqDate, ts:Date.now(), status:'denied'})); }catch(e){}
     try{ updateRequestsBadge(); }catch(e){}
     renderRequests();
     try{ renderMySchedule(); }catch(e){}
     try{ renderRosterSafe(); }catch(e){}
-    console.log('DENY: Local saved, now pushing to Firebase - reqs count', reqs.length);
+    // LIVE PUSH TO EMPLOYEE PHONE - instant with multiple methods
     try{
       var state=getAllState();
       state._ts=Date.now();
-      state._lastDeniedId=reqId;
-      state._lastDeniedUser=reqUser;
-      state._lastDeniedTs=Date.now();
       safeSet('repco_cloud_ts', String(state._ts));
-      var jsonState=JSON.stringify(state);
-      var jsonReqs=JSON.stringify(reqs);
-      console.log('DENY: Pushing state size', jsonState.length, 'reqs size', jsonReqs.length);
+      console.log('LIVE DENY: Pushing denied request', reqId, 'for user', reqUser, 'to Firebase');
       
-      // Try Firebase SDK first
+      // Method 1: Firebase SDK
       if(typeof db!=='undefined' && db && db.ref){
-        try{
-          db.ref('repco_state').set(state).then(function(){
-            console.log('DENY: SDK push success - employee should see in 2s');
-            toast('DENIED pushed via SDK to '+reqUser);
-          }).catch(function(err){
-            console.error('DENY: SDK push failed', err);
-          });
-        }catch(e){ console.error('DENY: SDK error', e); }
-      } else {
-        console.log('DENY: No db object, using REST only');
-      }
-      
-      // REST API - try multiple endpoints
-      function pushRest(url, body, label){
-        console.log('DENY: Pushing to', label, url);
-        fetch(url, {method:'PUT', headers:{'Content-Type':'application/json'}, body:body, mode:'cors', cache:'no-store'}).then(function(r){
-          console.log('DENY: REST', label, 'response', r.ok, r.status, r.statusText);
-          if(!r.ok){
-            console.error('DENY: REST', label, 'failed', r.status);
-            // Try no-cors fallback
-            return fetch(url, {method:'PUT', body:body, mode:'no-cors'}).then(function(){
-              console.log('DENY: REST', label, 'no-cors fallback sent');
-            });
-          }
-          return r.text().then(function(t){ console.log('DENY: REST', label, 'success, response length', t.length); });
-        }).catch(function(e){
-          console.error('DENY: REST', label, 'error', e);
-          try{
-            fetch(url, {method:'PUT', body:body, mode:'no-cors'}).then(function(){ console.log('DENY: REST', label, 'no-cors fallback after error'); });
-          }catch(e2){}
+        db.ref('repco_state').set(state).then(function(){
+          console.log('LIVE PUSH: Denied synced via SDK - employee will see instantly');
+          toast('LIVE: Denied pushed to '+reqUser);
+        }).catch(function(err){
+          console.error('SDK push failed', err);
         });
       }
-      
-      pushRest(FIREBASE_DB_URL+'/repco_state.json', jsonState, 'repco_state');
-      pushRest(FIREBASE_DB_URL+'/retail_roster_requests_v2.json', jsonReqs, 'requests_v2');
-      pushRest(FIREBASE_DB_URL+'/denied_requests/'+reqId+'.json', JSON.stringify(r), 'denied_single');
-      pushRest(FIREBASE_DB_URL+'/last_denied.json', JSON.stringify({id:reqId, user:reqUser, date:reqDate, ts:Date.now(), status:'denied'}), 'last_denied');
-      
-      // Retries
-      setTimeout(function(){
-        console.log('DENY: Retry 1s');
+      // Method 2: REST API - main state
+      var jsonState=JSON.stringify(state);
+      fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:jsonState, mode:'cors', cache:'no-store'}).then(function(r){
+        console.log('LIVE DENY: Main state PUT', r.ok, r.status);
+        if(!r.ok) throw new Error('Main state PUT failed '+r.status);
+        return r.json();
+      }).then(function(data){
+        console.log('LIVE DENY: Main state verified, now pushing requests separately');
+        // Method 3: Also push requests separately to ensure it arrives
+        return fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(reqs), mode:'cors', cache:'no-store'});
+      }).then(function(r2){
+        console.log('LIVE DENY: Requests separate PUT', r2.ok, r2.status);
+      }).catch(function(e){ 
+        console.error('LIVE DENY: Fetch failed', e);
+        // Fallback: try without cors
         try{
-          var s2=getAllState();
-          s2._ts=Date.now();
-          pushRest(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(s2), 'repco_state retry1');
-          pushRest(FIREBASE_DB_URL+'/retail_roster_requests_v2.json', JSON.stringify(safeGetJSON('retail_roster_requests_v2',[])), 'requests_v2 retry1');
+          fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',body:jsonState, mode:'no-cors'});
+          fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',body:JSON.stringify(reqs), mode:'no-cors'});
+        }catch(e2){ console.error('Fallback also failed', e2); }
+      });
+      
+      // Immediate retries
+      setTimeout(function(){
+        try{
+          var state2=getAllState();
+          state2._ts=Date.now();
+          fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state2), mode:'cors', cache:'no-store'}).then(function(r){ console.log('LIVE RETRY 1s:', r.ok); });
+          fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(safeGetJSON('retail_roster_requests_v2',[])), mode:'cors', cache:'no-store'});
         }catch(e){}
       },1000);
       setTimeout(function(){
-        console.log('DENY: Retry 3s');
         try{
-          var s3=getAllState();
-          s3._ts=Date.now();
-          pushRest(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(s3), 'repco_state retry3');
+          var state3=getAllState();
+          state3._ts=Date.now();
+          fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state3), mode:'cors', cache:'no-store'}).then(function(r){ console.log('LIVE RETRY 3s:', r.ok); });
         }catch(e){}
       },3000);
-      setTimeout(function(){
-        console.log('DENY: Retry 6s');
-        try{
-          var s4=getAllState();
-          s4._ts=Date.now();
-          pushRest(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(s4), 'repco_state retry6');
-        }catch(e){}
-      },6000);
       
+      // Local broadcast for same device
       try{
+        localStorage.setItem('repco_live_deny_'+reqId, JSON.stringify({id:reqId, user:reqUser, date:reqDate, ts:Date.now(), status:'denied'}));
+        // BroadcastChannel for instant same-browser sync
         if(typeof BroadcastChannel!=='undefined'){
           var bc=new BroadcastChannel('repco_roster_sync');
-          bc.postMessage({type:'request_denied', id:reqId, user:reqUser, date:reqDate, status:'denied', ts:Date.now(), request:r});
-          console.log('DENY: BroadcastChannel message sent');
+          bc.postMessage({type:'request_denied', id:reqId, user:reqUser, date:reqDate, status:'denied', ts:Date.now()});
         }
-      }catch(e){ console.error('BroadcastChannel failed', e); }
-      
-      try{
-        localStorage.setItem('repco_broadcast_denied', JSON.stringify({id:reqId, user:reqUser, date:reqDate, ts:Date.now()}));
       }catch(e){}
-      
-    }catch(e){ console.error('DENY: Live push error', e); }
-    toast('DENIED - PUSHING LIVE to '+reqUser+' for '+reqDate+' - Check console for Firebase status');
+    }catch(e){ console.error('Live push error', e); }
+    toast('DENIED - LIVE PUSHED to '+reqUser+' - Will show REJECTED in 2 seconds');
   }catch(e){ toast('Error: '+e.message); console.error(e); }
 }
 
@@ -4642,41 +4614,13 @@ function renderMySchedule(){
     // DANIEL FIX: Force fetch latest requests from Firebase on every My Schedule open
     (async function(){
       try{
-        console.log('FORCE FETCH: Starting for user', safeGet('repco_username'));
-        // Check denied_requests path first - most reliable
-        try{
-          var rd=await fetch(FIREBASE_DB_URL+'/denied_requests.json?_t='+Date.now(),{cache:'no-store', mode:'cors'});
-          if(rd.ok){
-            var deniedMap=await rd.json();
-            if(deniedMap){
-              var localReqs=safeGetJSON('retail_roster_requests_v2',[]);
-              var myUser=(safeGet('repco_username')||'').toLowerCase();
-              var hasUpdate=false;
-              for(var key in deniedMap){
-                var cr=deniedMap[key];
-                if(!cr || !cr.id) continue;
-                if(cr.username && cr.username.toLowerCase()!==myUser) continue;
-                var localIdx=localReqs.findIndex(function(lr){ return lr.id===cr.id; });
-                if(localIdx!==-1){
-                  var lr=localReqs[localIdx];
-                  if(lr.status==='pending' && (cr.status==='denied'||cr.status==='rejected')){
-                    console.log('FORCE FETCH (denied_requests): Updating', cr.id, 'from pending to denied');
-                    localReqs[localIdx]=cr;
-                    hasUpdate=true;
-                  }
-                }
-              }
-              if(hasUpdate){
-                safeSetJSON('retail_roster_requests_v2', localReqs);
-                try{localStorage.setItem('retail_roster_requests_update_ts', String(Date.now()));}catch(e){}
-                console.log('FORCE FETCH: Updated from denied_requests path');
-                setTimeout(function(){ try{ renderMySchedule(); }catch(e){} },100);
-                return; // Done, no need to check other paths
-              }
-            }
-          }
-        }catch(e){ console.error('denied_requests fetch error', e); }
-        
+        // Debounce - only run once every 4 seconds
+        if(window._lastForceFetch && Date.now() - window._lastForceFetch < 4000){
+          console.log('FORCE FETCH: Debounced');
+          return;
+        }
+        window._lastForceFetch = Date.now();
+
         var r1=await fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json?_t='+Date.now(),{cache:'no-store', mode:'cors'});
         if(r1.ok){
           var cloudReqs=await r1.json();
@@ -4697,15 +4641,11 @@ function renderMySchedule(){
                   localReqs[localIdx]=cr;
                   hasUpdate=true;
                 }
-              } else if(cr.status==='denied'||cr.status==='rejected'){
-                localReqs.push(cr);
-                hasUpdate=true;
               }
             }
             if(hasUpdate){
               safeSetJSON('retail_roster_requests_v2', localReqs);
               try{localStorage.setItem('retail_roster_requests_update_ts', String(Date.now()));}catch(e){}
-              console.log('FORCE FETCH: Updated local, re-rendering');
               setTimeout(function(){ try{ renderMySchedule(); }catch(e){} },100);
             }
           }
@@ -4722,7 +4662,7 @@ function renderMySchedule(){
               for(var i=0;i<cloudReqs2.length;i++){
                 var cr=cloudReqs2[i];
                 if(!cr || !cr.id) continue;
-                if(cr.username && cr.username.toLowerCase()!==myUser2) continue;
+                // if(cr.username && cr.username.toLowerCase()!==myUser2) continue;
                 var localIdx=localReqs2.findIndex(function(lr){ return lr.id===cr.id; });
                 if(localIdx!==-1){
                   var lr=localReqs2[localIdx];
@@ -4737,30 +4677,6 @@ function renderMySchedule(){
                 safeSetJSON('retail_roster_requests_v2', localReqs2);
                 setTimeout(function(){ try{ renderMySchedule(); }catch(e){} },100);
               }
-            }
-          }
-          // Check last_denied marker
-          if(data && data._lastDeniedId){
-            var lastDeniedId=data._lastDeniedId;
-            var localReqs3=safeGetJSON('retail_roster_requests_v2',[]);
-            var found=localReqs3.find(function(r){ return r.id===lastDeniedId; });
-            if(found && found.status==='pending'){
-              console.log('FORCE FETCH: Found last_denied marker', lastDeniedId, 'but local still pending - fetching denied_requests/'+lastDeniedId);
-              try{
-                var r3=await fetch(FIREBASE_DB_URL+'/denied_requests/'+lastDeniedId+'.json?_t='+Date.now(),{cache:'no-store', mode:'cors'});
-                if(r3.ok){
-                  var deniedReq=await r3.json();
-                  if(deniedReq && deniedReq.status==='denied'){
-                    var idx=localReqs3.findIndex(function(r){ return r.id===lastDeniedId; });
-                    if(idx!==-1){
-                      localReqs3[idx]=deniedReq;
-                      safeSetJSON('retail_roster_requests_v2', localReqs3);
-                      console.log('FORCE FETCH: Updated from denied_requests single', lastDeniedId);
-                      setTimeout(function(){ try{ renderMySchedule(); }catch(e){} },100);
-                    }
-                  }
-                }
-              }catch(e){}
             }
           }
         }
