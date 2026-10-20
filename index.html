@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022700014_FIX_G_AND_LUKE_V138";
+const BUILD_ID="20261022700017_REMEMBER_ORIGINAL_V141";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -2286,28 +2286,53 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
           }
           var newVal=val.trim();
           var wasBackspaceRestore=false;
-          // If empty / backspaced, restore original shift
+          // If empty / backspaced, restore original shift (including for approved unavailability OFF/UA/AB)
           if(!newVal){
             wasBackspaceRestore=true;
-            if(staff.originalShifts && staff.originalShifts[colIdx]){
-              newVal=staff.originalShifts[colIdx];
+            // V140: For approved unavailability (AB/NA/UA/OFF) - restore original shift per previously defined logic
+            var restoredOriginal = null;
+            if(staff.originalShifts){
+              // Try both array and object access
+              if(staff.originalShifts[colIdx]!==undefined) restoredOriginal = staff.originalShifts[colIdx];
+              else if(staff.originalShifts[String(colIdx)]!==undefined) restoredOriginal = staff.originalShifts[String(colIdx)];
+              else if(typeof staff.originalShifts==='object'){
+                // If originalShifts is object with keys, try to find it
+                try{
+                  var keys = Object.keys(staff.originalShifts);
+                  for(var k=0;k<keys.length;k++){
+                    if(parseInt(keys[k])===colIdx) { restoredOriginal = staff.originalShifts[keys[k]]; break; }
+                  }
+                }catch(e){}
+              }
+            }
+            if(restoredOriginal!==null && restoredOriginal!==undefined && String(restoredOriginal).trim()!==''){
+              newVal=restoredOriginal;
+              console.log('V140: Backspace restore - restoring original from originalShifts', newVal, 'for', staff.firstName, colIdx, 'was', current);
             } else {
+              // No original stored - if current is AB/NA/UA/OFF from unavailability, restore to OFF as fallback but log
+              console.log('V140: Backspace restore - no original found for', staff.firstName, colIdx, 'current', current, '- restoring OFF');
               newVal='OFF';
             }
-            console.log('V135: Backspace restore - restoring original', newVal, 'for', staff.firstName, colIdx);
+            console.log('V140: Backspace restore final', newVal, 'for', staff.firstName, colIdx);
           }
-          var up=newVal.toUpperCase();
+          var up=newVal.toUpperCase().trim();
           var isGreen=false;
           var isAB=false;
           var isNA=false;
           var isGFlag=false;
           var actualShift=newVal;
+          // V139: Green handling - G, GREEN, G <shift>, GREEN <shift> - fixed
           if(up==='G' || up==='GREEN'){
             isGreen=true;
             actualShift=current;
-            if(up.startsWith('G ')){
-              actualShift=newVal.substring(2).trim();
-              isGreen=true;
+          } else if(up.startsWith('G ') || up.startsWith('GREEN ')){
+            isGreen=true;
+            var prefix = up.startsWith('GREEN ') ? 6 : 2;
+            var afterG = newVal.substring(prefix).trim();
+            if(afterG){
+              actualShift=afterG;
+            } else {
+              actualShift=current;
             }
           } else if(up==='AB' || up==='ABSENT' || up==='A'){
             isAB=true;
@@ -2330,8 +2355,15 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
               }
             }
           }catch(e){}
-          if(!staff.originalShifts) staff.originalShifts=[];
-          if(!staff.originalShifts[colIdx]) staff.originalShifts[colIdx]=staff.shifts[colIdx];
+          // V141: Always remember previous data prior to any approval/edit - preserve first original
+          if(!staff.originalShifts) staff.originalShifts={};
+          var existingManualOrig = null;
+          if(staff.originalShifts[colIdx]!==undefined) existingManualOrig = staff.originalShifts[colIdx];
+          else if(staff.originalShifts[String(colIdx)]!==undefined) existingManualOrig = staff.originalShifts[String(colIdx)];
+          if(existingManualOrig===null || existingManualOrig===undefined || String(existingManualOrig).trim()===''){
+            staff.originalShifts[colIdx]=staff.shifts[colIdx];
+            try{ staff.originalShifts[String(colIdx)]=staff.shifts[colIdx]; }catch(e){}
+          }
           try{ if(typeof pushUndo==='function') pushUndo(); }catch(e){}
           if(isGFlag){
             if(!staff.cellG) staff.cellG=[];
@@ -2421,9 +2453,20 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
               if(typeof rq.shiftIdx==='number' && rq.shiftIdx===colIdx) dateMatch=true;
               if(rq.shiftDate && dateStr && rq.shiftDate.indexOf(dateStr)!==-1) dateMatch=true;
               if(rq.shiftISO && isoStr && rq.shiftISO===isoStr) dateMatch=true;
+              // V139: Robust date matching for backspace restore
+              if(rq.shiftDate && dateStr){
+                var cleanDateStr = dateStr.replace(/[^0-9\/]/g,'');
+                var cleanShiftDate = rq.shiftDate.replace(/[^0-9\/]/g,'');
+                if(cleanShiftDate && cleanDateStr && (cleanShiftDate.indexOf(cleanDateStr)!==-1 || cleanDateStr.indexOf(cleanShiftDate)!==-1)) dateMatch=true;
+              }
               if(rq.dates && Array.isArray(rq.dates)){
                 for(var di=0;di<rq.dates.length;di++){
                   if(rq.dates[di] && dateStr && rq.dates[di].indexOf(dateStr)!==-1) dateMatch=true;
+                  if(rq.dates[di]){
+                    var cd = rq.dates[di].replace(/[^0-9\/]/g,'');
+                    var cds = dateStr.replace(/[^0-9\/]/g,'');
+                    if(cd && cds && (cd.indexOf(cds)!==-1 || cds.indexOf(cd)!==-1)) dateMatch=true;
+                  }
                 }
               }
               if(!dateMatch) continue;
@@ -2436,9 +2479,10 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
               matchedReqs.push(rq.id);
               hadApprovedRevert=true;
             }
-            if(hadApprovedRevert){
-              // CRITICAL: Use admin's new edited shift (actualShift), NOT original - and CLEAR GREEN
-              console.log('V130: Clearing green for', staff.firstName, dateStr, 'new shift', actualShift, 'matched reqs', matchedReqs.join(','));
+            if(hadApprovedRevert || wasBackspaceRestore){
+              // CRITICAL: V140 - Use admin's new edited shift (actualShift), NOT original - and CLEAR GREEN
+              // wasBackspaceRestore includes approved unavailability OFF/UA/AB -> restore original per previously defined
+              console.log('V140: Clearing green/unavailability for', staff.firstName, dateStr, 'new shift', actualShift, 'matched reqs', matchedReqs.join(','), 'backspace?', wasBackspaceRestore, 'current was', current);
               // Ensure staff object uses admin's edit
               staff.shifts[colIdx]=actualShift;
               if(targetStaff) targetStaff.shifts[colIdx]=actualShift;
@@ -2498,6 +2542,58 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
               toast('Green cleared - '+staff.firstName+' '+dateStr+' now '+actualShift+' as if never requested (superseded '+matchedReqs.length+' request(s))');
               try{ renderMySchedule(); }catch(e){}
             } else if(wasBackspaceRestore){
+              // V139: Backspace restore - clear green even if no approved matched, and force supersede any approved for this date/staff
+              try{
+                // V140: Force supersede any remaining approved (including unavailability OFF/UA/AB) for this staff/date
+                var allReqsForce=safeGetJSON('retail_roster_requests_v2',[]);
+                var forceMatched=[];
+                for(var rfi=0;rfi<allReqsForce.length;rfi++){
+                  var rf= allReqsForce[rfi];
+                  if(!rf || rf.status!=='approved') continue;
+                  // Match by username
+                  var umatch=false;
+                  if(rf.username){
+                    var un=rf.username.toLowerCase();
+                    var fn=(staff.firstName||'').toLowerCase();
+                    var ln=(staff.lastName||'').toLowerCase();
+                    var full=(fn+' '+ln).toLowerCase();
+                    if(un===fn || un===ln || un===full || full.indexOf(un)!==-1 || un.indexOf(fn)!==-1) umatch=true;
+                  }
+                  if(!umatch) continue;
+                  // Match by date - cleaned, including dates array for unavailability
+                  var dmatch=false;
+                  if(rf.shiftDate && dateStr){
+                    var csd=rf.shiftDate.replace(/[^0-9\/]/g,'');
+                    var cds=dateStr.replace(/[^0-9\/]/g,'');
+                    if(csd && cds && (csd.indexOf(cds)!==-1 || cds.indexOf(csd)!==-1)) dmatch=true;
+                    if(rf.shiftDate.indexOf(dateStr)!==-1) dmatch=true;
+                  }
+                  if(rf.shiftISO && isoStr && rf.shiftISO===isoStr) dmatch=true;
+                  if(typeof rf.shiftIdx==='number' && rf.shiftIdx===colIdx) dmatch=true;
+                  // V140: Check dates array for unavailability requests (OFF/UA)
+                  if(rf.dates && Array.isArray(rf.dates)){
+                    for(var fdi=0;fdi<rf.dates.length;fdi++){
+                      var fd = rf.dates[fdi];
+                      if(!fd) continue;
+                      if(fd.indexOf && dateStr && fd.indexOf(dateStr)!==-1) dmatch=true;
+                      var fdc = String(fd).replace(/[^0-9\/]/g,'');
+                      var cdsc = dateStr.replace(/[^0-9\/]/g,'');
+                      if(fdc && cdsc && (fdc.indexOf(cdsc)!==-1 || cdsc.indexOf(fdc)!==-1)) dmatch=true;
+                    }
+                  }
+                  if(!dmatch) continue;
+                  rf.status='superseded';
+                  rf.supersededTs=Date.now();
+                  rf.supersededNote='V140: Admin backspaced/restored roster cell from '+(rf.newShift||'AB/UA/OFF')+' to '+actualShift+' - superseded approved '+(rf.type||'')+' request, restored original per previously defined';
+                  rf.readByStaff=false;
+                  forceMatched.push(rf.id);
+                }
+                if(forceMatched.length>0){
+                  safeSetJSON('retail_roster_requests_v2', allReqsForce);
+                  try{ fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(allReqsForce),mode:'cors'}).catch(function(){}); }catch(e){}
+                  console.log('V139: Force superseded on backspace', forceMatched.join(','));
+                }
+              }catch(e){ console.log('V139 force supersede error', e); }
               // V135: Backspace without approved request - still need to clear green flags and restore
               console.log('V135: Backspace restore without approved - clearing green for', staff.firstName, dateStr);
               try{
@@ -4648,8 +4744,21 @@ function approveReq(idx){
               }
             }
             if(dateIdx!==-1){
+              // V141: Roster MUST always remember previous data prior to approval - so admin can backspace to restore
               if(!staff.originalShifts) staff.originalShifts={};
-              if(!staff.originalShifts[dateIdx]) staff.originalShifts[dateIdx]=staff.shifts[dateIdx];
+              // Only save original if not already saved - preserve very first pre-approval shift
+              var existingOrig = null;
+              if(staff.originalShifts[dateIdx]!==undefined) existingOrig = staff.originalShifts[dateIdx];
+              else if(staff.originalShifts[String(dateIdx)]!==undefined) existingOrig = staff.originalShifts[String(dateIdx)];
+              if(existingOrig===null || existingOrig===undefined || String(existingOrig).trim()===''){
+                // Save current shift as original before overwriting to AB/OFF/UA
+                staff.originalShifts[dateIdx]=staff.shifts[dateIdx];
+                // Also save in both array and object form for robustness
+                try{ staff.originalShifts[String(dateIdx)]=staff.shifts[dateIdx]; }catch(e){}
+                console.log('V141: Saved original for unavailability', staff.firstName, fn.dates[dateIdx].date, 'original', staff.shifts[dateIdx], '-> AB');
+              } else {
+                console.log('V141: Original already saved for', staff.firstName, fn.dates[dateIdx].date, 'keeping', existingOrig, 'not overwriting with', staff.shifts[dateIdx]);
+              }
               staff.shifts[dateIdx]='AB';
               if(!staff.absentApproved) staff.absentApproved={};
               staff.absentApproved[dateIdx]=true;
@@ -4675,8 +4784,18 @@ function approveReq(idx){
             }
           }
           if(targetIdx!==undefined && targetIdx>=0 && targetIdx<staff.shifts.length){
+            // V141: Roster MUST always remember previous data prior to approval
             if(!staff.originalShifts) staff.originalShifts={};
-            if(!staff.originalShifts[targetIdx]) staff.originalShifts[targetIdx]=staff.shifts[targetIdx];
+            var existingOrigSC = null;
+            if(staff.originalShifts[targetIdx]!==undefined) existingOrigSC = staff.originalShifts[targetIdx];
+            else if(staff.originalShifts[String(targetIdx)]!==undefined) existingOrigSC = staff.originalShifts[String(targetIdx)];
+            if(existingOrigSC===null || existingOrigSC===undefined || String(existingOrigSC).trim()===''){
+              staff.originalShifts[targetIdx]=staff.shifts[targetIdx];
+              try{ staff.originalShifts[String(targetIdx)]=staff.shifts[targetIdx]; }catch(e){}
+              console.log('V141: Saved original for shift-correction', staff.firstName, fn.dates[targetIdx].date, 'original', staff.shifts[targetIdx], '->', req.newShift);
+            } else {
+              console.log('V141: Original already saved for shift-correction', staff.firstName, fn.dates[targetIdx].date, 'keeping', existingOrigSC);
+            }
             var old=staff.shifts[targetIdx];
             staff.shifts[targetIdx]=req.newShift||'OFF';
             if((req.newShift||'').toUpperCase()==='AB'){
@@ -5937,11 +6056,11 @@ function renderMySchedule(){
       if(found){
         var reqData=found.req; var reqIdx=found.index; var reqStatus=found.status||reqData.status||'pending';
         if(reqStatus==='approved'){
-          // V137: If admin edited roster after approval, show roster not approved
+          // V139: If admin edited roster after approval (including backspace restore to original), show roster not approved
+          // If roster != approved newShift, admin overrode - even if roster == oldShift (backspace case)
           var rosterNormCurr = String(currentShift.shift||'').trim().toUpperCase();
           var approvedNewNormCurr = String(reqData.newShift||'').trim().toUpperCase();
-          var approvedOldNormCurr = String(reqData.oldShift||'').trim().toUpperCase();
-          if(rosterNormCurr && approvedNewNormCurr && rosterNormCurr!==approvedNewNormCurr && rosterNormCurr!==approvedOldNormCurr){
+          if(rosterNormCurr && approvedNewNormCurr && rosterNormCurr!==approvedNewNormCurr){
             console.log('V137: Current roster', currentShift.shift, 'differs from approved', reqData.newShift, '- admin override');
             try{
               var allReqsForFixCurr=safeGetJSON('retail_roster_requests_v2',[]);
@@ -5990,11 +6109,10 @@ function renderMySchedule(){
         if(foundU){
           var reqU=foundU.req; var reqIdx=foundU.index; var reqStatus=foundU.status||reqU.status||'pending';
           if(reqStatus==='approved'){
-            // V137: Check if admin overrode approved shift - if roster differs from approved newShift, show roster
+            // V139: If admin edited roster after approval (including backspace restore), show roster
             var rosterNorm = String(u.shift||'').trim().toUpperCase();
             var approvedNewNormU = String(reqU.newShift||'').trim().toUpperCase();
-            var approvedOldNormU = String(reqU.oldShift||'').trim().toUpperCase();
-            if(rosterNorm && approvedNewNormU && rosterNorm!==approvedNewNormU && rosterNorm!==approvedOldNormU){
+            if(rosterNorm && approvedNewNormU && rosterNorm!==approvedNewNormU){
               console.log('V137: Upcoming roster', u.shift, 'differs from approved', reqU.newShift, '- admin override');
               try{
                 var allReqsForFixU=safeGetJSON('retail_roster_requests_v2',[]);
