@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_INSTANT_MYSCHED_V118";
+const BUILD_ID="20261022690000_INSTANT_V119";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -2151,21 +2151,38 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
           else if(isNA) msg='Marked unavailable';
           else if(newVal===staff.originalShifts[colIdx]) msg='Restored original';
           if(!hadApprovedRevert) toast(msg+' - '+staff.firstName+' '+cur.dates[colIdx].date);
-          // V118: Force instant cloud sync for roster edits - don't wait for debounce
+          // V118/V119: Force instant cloud sync for roster edits - don't wait for debounce
           try{ 
             // Immediate push
             var state=getAllState();
-            state._ts=Date.now();
+            var nowTs=Date.now();
+            state._ts=nowTs;
             safeSet('repco_cloud_ts', String(state._ts));
+            // Broadcast to other tabs instantly
+            try{
+              if(typeof BroadcastChannel!=='undefined'){
+                var bc=new BroadcastChannel('repco_roster_sync');
+                bc.postMessage({type:'roster_updated', ts:nowTs, fortnightId:cur.id, staff:staff.firstName+' '+staff.lastName, date:cur.dates[colIdx].date, shift:actualShift});
+              }
+            }catch(e){}
             if(typeof db!=='undefined' && db && db.ref){
               db.ref('repco_state').set(state);
             } else {
-              fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state),mode:'cors'}).catch(function(){});
+              fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state),mode:'cors'}).catch(function(){
+                fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state),mode:'no-cors'}).catch(function(){});
+              });
             }
-            fetch(FIREBASE_DB_URL+'/retail_roster_byFortnight_v1.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(fns),mode:'cors'}).catch(function(){});
+            // Push roster separately for direct polling - with fallback
+            try{
+              fetch(FIREBASE_DB_URL+'/retail_roster_byFortnight_v1.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(fns),mode:'cors'}).then(function(res){
+                if(!res.ok) throw new Error('cors failed');
+              }).catch(function(){
+                fetch(FIREBASE_DB_URL+'/retail_roster_byFortnight_v1.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(fns),mode:'no-cors'}).catch(function(){});
+              });
+            }catch(e){}
             // Also debounced as backup
             debouncedCloudSave(); 
-          }catch(e){}
+          }catch(e){ console.log('V119 instant sync error', e); }
           try{ if(typeof updateUndoButton==='function') updateUndoButton(); }catch(e){}
         }catch(e){
           console.error('saveEdit error', e);
@@ -5810,12 +5827,40 @@ function updateRequestsBadge(){
 }
 // Poll for new requests every 5 seconds to show instant notifications across accounts
 setInterval(function(){ try{ updateRequestsBadge(); }catch(e){} }, 5000);
-// Also listen for storage changes (when another tab/user submits request)
+// Also listen for storage changes (when another tab/user submits request or roster edited)
 window.addEventListener('storage', function(e){
   if(e.key && e.key.indexOf('retail_roster_requests')!==-1){
-    try{ updateRequestsBadge(); renderRequests(); }catch(err){}
+    try{ updateRequestsBadge(); renderRequests(); renderMySchedule(); }catch(err){}
+  }
+  if(e.key && e.key.indexOf('retail_roster_byFortnight')!==-1){
+    try{ renderRosterSafe(); renderMySchedule(); updateMyScheduleCard(); }catch(err){ console.log('storage roster update', err); }
+  }
+  if(e.key && e.key.indexOf('repco_cloud_ts')!==-1){
+    try{ renderMySchedule(); }catch(err){}
   }
 });
+// V119: BroadcastChannel for instant cross-tab roster updates
+try{
+  if(typeof BroadcastChannel!=='undefined'){
+    var bcRoster=new BroadcastChannel('repco_roster_sync');
+    bcRoster.onmessage=function(ev){
+      try{
+        if(!ev || !ev.data) return;
+        if(ev.data.type==='roster_updated' || ev.data.type==='delete_request' || ev.data.type==='request_updated'){
+          console.log('BC: roster/request update received', ev.data.type);
+          try{ renderRosterSafe(); }catch(e){}
+          try{ renderMySchedule(); }catch(e){}
+          try{ renderRequests(); }catch(e){}
+          try{ updateRequestsBadge(); }catch(e){}
+          // Also trigger cloud load to get latest from Firebase
+          try{ 
+            if(ev.data.ts) safeSet('repco_cloud_ts', String(ev.data.ts-1)); // force next poll to see as newer
+          }catch(e){}
+        }
+      }catch(e){}
+    };
+  }
+}catch(e){}
 
 
 function deleteMyRequest(idx){
