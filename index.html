@@ -580,7 +580,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022540000_FIX_ALL_V58";
+const BUILD_ID="20261022550000_FORCE_DENIED_V59";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -4546,7 +4546,8 @@ document.addEventListener('DOMContentLoaded',()=>{
 
 function renderMySchedule(){
   try{
-    // AUTO SYNC: Automatic live sync for denied requests - no manual code needed
+    // AUTO SYNC: Automatic live sync for denied requests - FORCE overwrite pending with denied - NO USERNAME FILTER
+    // This fixes Daniel's issue where My Schedule shows PENDING APPROVAL highlighted even after admin denied
     if(!window._liveSyncInterval){
       window._liveSyncInterval=setInterval(async function(){
         try{
@@ -4555,7 +4556,39 @@ function renderMySchedule(){
           var localReqs=safeGetJSON('retail_roster_requests_v2',[]);
           var hasPending=localReqs.some(function(r){ return r.status==='pending'; });
           if(!hasPending) return;
-          console.log('AUTO SYNC: Checking for denied requests...');
+          console.log('AUTO SYNC: Checking for denied - local pending exists', localReqs.filter(function(r){ return r.status==='pending'; }).map(function(r){ return r.id+':'+r.shiftDate; }));
+          
+          // Check 1: denied_requests path - most reliable, contains all denied
+          try{
+            var rd=await fetch(FIREBASE_DB_URL+'/denied_requests.json?_t='+Date.now(),{cache:'no-store', mode:'cors'});
+            if(rd.ok){
+              var deniedMap=await rd.json();
+              if(deniedMap){
+                var hasUpdate=false;
+                for(var key in deniedMap){
+                  var cr=deniedMap[key];
+                  if(!cr || !cr.id) continue;
+                  var idx=localReqs.findIndex(function(lr){ return lr.id===cr.id; });
+                  if(idx!==-1 && localReqs[idx].status==='pending'){
+                    console.log('AUTO SYNC: Found denied in denied_requests', cr.id, 'pending->denied, FORCE OVERWRITE');
+                    localReqs[idx]=cr;
+                    hasUpdate=true;
+                  }
+                }
+                if(hasUpdate){
+                  safeSetJSON('retail_roster_requests_v2', localReqs);
+                  try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
+                  console.log('AUTO SYNC: Updated from denied_requests, re-rendering My Schedule');
+                  try{ renderMySchedule(); }catch(e){}
+                  try{ renderRequests(); }catch(e){}
+                  toast('Live update: Request denied');
+                  return;
+                }
+              }
+            }
+          }catch(e){ console.error('denied_requests poll error', e); }
+          
+          // Check 2: requests_v2 path
           try{
             var r=await fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json?_t='+Date.now(),{cache:'no-store', mode:'cors'});
             if(r.ok){
@@ -4567,24 +4600,58 @@ function renderMySchedule(){
                   if(!cr || !cr.id) continue;
                   var idx=localReqs.findIndex(function(lr){ return lr.id===cr.id; });
                   if(idx!==-1 && localReqs[idx].status==='pending' && (cr.status==='denied'||cr.status==='rejected'||cr.status==='approved')){
-                    console.log('AUTO SYNC: Found', cr.id, 'pending->', cr.status);
+                    console.log('AUTO SYNC: Found', cr.id, 'pending->', cr.status, 'via requests_v2, FORCE OVERWRITE');
                     localReqs[idx]=cr;
                     hasUpdate=true;
                   }
                 }
                 if(hasUpdate){
                   safeSetJSON('retail_roster_requests_v2', localReqs);
+                  try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
                   try{ renderMySchedule(); }catch(e){}
                   try{ renderRequests(); }catch(e){}
-                  toast('Live update: Request status changed');
+                  toast('Live update: Request '+ (hasUpdate ? 'status changed' : ''));
+                  return;
                 }
               }
             }
-          }catch(e){ console.error('Auto sync fetch error', e); }
+          }catch(e){ console.error('Auto sync requests_v2 error', e); }
+          
+          // Check 3: main state
+          try{
+            var r2=await fetch(FIREBASE_DB_URL+'/repco_state.json?_t='+Date.now(),{cache:'no-store', mode:'cors'});
+            if(r2.ok){
+              var state=await r2.json();
+              if(state && state['retail_roster_requests_v2']){
+                var cloudReqs2=JSON.parse(state['retail_roster_requests_v2']);
+                if(Array.isArray(cloudReqs2)){
+                  var hasUpdate=false;
+                  for(var i=0;i<cloudReqs2.length;i++){
+                    var cr=cloudReqs2[i];
+                    if(!cr || !cr.id) continue;
+                    var idx=localReqs.findIndex(function(lr){ return lr.id===cr.id; });
+                    if(idx!==-1 && localReqs[idx].status==='pending' && (cr.status==='denied'||cr.status==='rejected')){
+                      console.log('AUTO SYNC: Found denied via main state', cr.id);
+                      localReqs[idx]=cr;
+                      hasUpdate=true;
+                    }
+                  }
+                  if(hasUpdate){
+                    safeSetJSON('retail_roster_requests_v2', localReqs);
+                    try{ renderMySchedule(); }catch(e){}
+                    toast('Live update: Denied');
+                    return;
+                  }
+                }
+              }
+            }
+          }catch(e){}
+          
         }catch(e){ console.error('Auto sync error', e); }
-      },2000);
-      console.log('AUTO SYNC: Started polling every 2s');
+      },1500); // Check every 1.5s for faster update
+      console.log('AUTO SYNC: Started polling every 1.5s - NO USERNAME FILTER, FORCE OVERWRITE pending->denied');
     }
+    if(!window._bcListener){
     if(!window._bcListener){
       try{
         if(typeof BroadcastChannel!=='undefined'){
@@ -4848,6 +4915,19 @@ function renderMySchedule(){
           }
         }
         if(dateMatch) return {req:r, index:rr, status:'approved'};
+      }
+      // PRIORITY 3b: Fallback - Check denied without username filter (fixes empty username case)
+      for(var rr=0;rr<reqs.length;rr++){
+        var r=reqs[rr];
+        if(!r) continue;
+        if(r.status!=='denied' && r.status!=='rejected') continue;
+        var rDateKey=extractDateKey(r.shiftDate||'')||extractDateKey(r.shiftISO||'');
+        var objDateKey=extractDateKey(dateObj.date||'')||dateObj.date;
+        var dateMatch = (rDateKey && objDateKey && rDateKey===objDateKey) || (r.shiftDate && datesMatch(r.shiftDate, dateObj, iso)) || (r.shiftISO && iso && r.shiftISO===iso);
+        if(dateMatch){
+          console.log('findRequestForShift: Found denied without username filter', r.id, r.shiftDate);
+          return {req:r, index:rr, status:'denied'};
+        }
       }
       // PRIORITY 3: Check pending - LOWEST, only if no denied/approved exists for same date
       for(var rr=0;rr<reqs.length;rr++){
