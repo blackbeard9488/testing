@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_APPROVE_V105";
+const BUILD_ID="20261022690000_FIX_APPROVE_DENIED_V106";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -4566,38 +4566,56 @@ document.addEventListener('DOMContentLoaded',()=>{
 function renderMySchedule(){
   try{
 
-    // AGGRESSIVE FIX: If employee has pending and denied for same date OR same ID, remove pending - ensures DENIED shows not PENDING
+    // FIXED AGGRESSIVE FIX: If employee has pending and approved/denied for same ID, remove pending - but keep approved/denied visible
     try{
       var reqsForClean=safeGetJSON('retail_roster_requests_v2',[]);
       if(Array.isArray(reqsForClean) && reqsForClean.length>0){
-        var deniedByDate={};
-        var deniedById={};
+        var processedById={};
+        var cleaned=[];
+        var hadPendingRemoved=false;
+        // First pass: index all non-pending by ID and by date
+        var finalById={};
+        var finalByDate={};
         for(var d=0;d<reqsForClean.length;d++){
           var rd=reqsForClean[d];
           if(!rd) continue;
-          if(rd.status==='denied'||rd.status==='rejected'||rd.status==='approved'){
+          if(rd.status!=='pending'){
+            if(rd.id) finalById[rd.id]=rd;
             var m=rd.shiftDate?rd.shiftDate.match(/(\d{1,2}\/\d{1,2})/):null;
-            var key=(rd.username||'').toLowerCase()+'|'+(m?m[1]:rd.shiftDate||'');
-            deniedByDate[key]=true;
-            if(rd.id) deniedById[rd.id]=true;
+            var key=(rd.username||'').toLowerCase()+'|'+(m?m[1]:rd.shiftDate||'')+'|'+(rd.shiftIdx!==undefined?rd.shiftIdx:'');
+            if(!finalByDate[key]) finalByDate[key]=[];
+            finalByDate[key].push(rd);
           }
         }
-        var cleaned=[];
-        var hadPendingRemoved=false;
+        // Second pass: keep all non-pending, and only keep pending if no final version exists for same ID or same date+idx with newer ts
         for(var c=0;c<reqsForClean.length;c++){
           var rc=reqsForClean[c];
           if(!rc) continue;
-          if(rc.status==='pending'){
-            // Check by ID first - if this pending ID is in deniedById, it was denied but local still has pending version
-            if(rc.id && deniedById[rc.id]){
-              console.log('AGGRESSIVE FIX: Removing pending by ID', rc.id, 'because denied exists with same ID');
-              hadPendingRemoved=true;
-              continue;
+          if(rc.status!=='pending'){
+            cleaned.push(rc);
+            continue;
+          }
+          // Pending: check if same ID exists as approved/denied
+          if(rc.id && finalById[rc.id]){
+            console.log('FIXED AGGRESSIVE FIX: Removing pending by ID', rc.id, 'because', finalById[rc.id].status, 'exists');
+            hadPendingRemoved=true;
+            continue;
+          }
+          // Check by date+idx: if there's approved/denied for same date+idx with newer ts, remove pending
+          var m2=rc.shiftDate?rc.shiftDate.match(/(\d{1,2}\/\d{1,2})/):null;
+          var pk=(rc.username||'').toLowerCase()+'|'+(m2?m2[1]:rc.shiftDate||'')+'|'+(rc.shiftIdx!==undefined?rc.shiftIdx:'');
+          if(finalByDate[pk] && finalByDate[pk].length>0){
+            // Check if any final has newer ts
+            var hasNewer=false;
+            for(var f=0;f<finalByDate[pk].length;f++){
+              var finalReq=finalByDate[pk][f];
+              if((finalReq.ts||0) >= (rc.ts||0)){
+                hasNewer=true;
+                break;
+              }
             }
-            var m2=rc.shiftDate?rc.shiftDate.match(/(\d{1,2}\/\d{1,2})/):null;
-            var pk=(rc.username||'').toLowerCase()+'|'+(m2?m2[1]:rc.shiftDate||'');
-            if(deniedByDate[pk]){
-              console.log('AGGRESSIVE FIX: Removing pending', rc.id, 'date', rc.shiftDate, 'because denied exists for', pk);
+            if(hasNewer){
+              console.log('FIXED AGGRESSIVE FIX: Removing pending', rc.id, 'because final exists for', pk);
               hadPendingRemoved=true;
               continue;
             }
@@ -4606,7 +4624,7 @@ function renderMySchedule(){
         }
         if(hadPendingRemoved){
           safeSetJSON('retail_roster_requests_v2', cleaned);
-          console.log('AGGRESSIVE FIX: Cleaned, removed pending, now', cleaned.length, 'total, was', reqsForClean.length);
+          console.log('FIXED AGGRESSIVE FIX: Cleaned, removed pending, now', cleaned.length, 'total, was', reqsForClean.length);
         }
       }
     }catch(e){ console.error('Aggressive fix error', e); }
@@ -4787,12 +4805,12 @@ function renderMySchedule(){
         return false;
       }
       
-      // PRIORITY 1: Check denied/rejected - HIGHEST, always show if exists (no 14-day filter)
+      // FIXED PRIORITY: Find ALL matching requests for this date/user, return most recent by ts
+      var matches=[];
       for(var rr=0;rr<reqs.length;rr++){
         var r=reqs[rr];
         if(!r) continue;
         if(r.username && r.username.toLowerCase()!==myUsername) continue;
-        if(r.status!=='denied' && r.status!=='rejected') continue;
         var rDateKey=extractDateKey(r.shiftDate||'')||extractDateKey(r.shiftISO||'');
         var objDateKey=extractDateKey(dateObj.date||'')||dateObj.date;
         var dateMatch = (rDateKey && objDateKey && rDateKey===objDateKey) || (r.shiftDate && datesMatch(r.shiftDate, dateObj, iso)) || (r.shiftISO && iso && r.shiftISO===iso);
@@ -4803,25 +4821,41 @@ function renderMySchedule(){
             }
           }
         }
-        if(dateMatch) return {req:r, index:rr, status:'denied'};
+        if(!dateMatch && r.dates && Array.isArray(r.dates)){
+          for(var di=0;di<r.dates.length;di++){
+            if(datesMatch(r.dates[di], dateObj, iso)){
+              dateMatch=true;
+              break;
+            }
+          }
+        }
+        if(dateMatch){
+          matches.push({req:r, index:rr, status:r.status||'pending', ts:r.ts||r.deniedTs||r.approvedTs||0});
+        }
       }
-      // PRIORITY 2: Check approved - SECOND HIGHEST
-      for(var rr=0;rr<reqs.length;rr++){
-        var r=reqs[rr];
-        if(!r) continue;
-        if(r.username && r.username.toLowerCase()!==myUsername) continue;
-        if(r.status!=='approved') continue;
-        var rDateKey=extractDateKey(r.shiftDate||'')||extractDateKey(r.shiftISO||'');
-        var objDateKey=extractDateKey(dateObj.date||'')||dateObj.date;
-        var dateMatch = (rDateKey && objDateKey && rDateKey===objDateKey) || (r.shiftDate && datesMatch(r.shiftDate, dateObj, iso)) || (r.shiftISO && iso && r.shiftISO===iso);
-        if(!dateMatch){
-          if(typeof r.shiftIdx==='number' && typeof idx==='number' && r.shiftIdx===idx){
-            if(!r.fortnightId || !dateObj.fortnight || r.fortnightId===dateObj.fortnight.id){
-              dateMatch=true;
+      if(matches.length>0){
+        // Sort by most recent first
+        matches.sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
+        // Prefer non-pending if exists and is most recent, but if most recent is pending and there's an approved/denied newer than pending, that newer wins due to sort
+        // If multiple statuses for same date, return most recent
+        var best=matches[0];
+        // If best is pending but there's a more recent approved/denied within same date that is slightly older due to ts, still check: actually most recent wins
+        // Ensure denied/approved take precedence over pending when same ts
+        if(best.status==='pending'){
+          // Look for approved/denied that is close in time (within 5 min) and prefer it
+          for(var mi=0;mi<matches.length;mi++){
+            if(matches[mi].status!=='pending' && Math.abs((matches[mi].ts||0)-best.ts)<5*60*1000){
+              // If approved/denied within 5 min of pending, prefer approved/denied (admin action after pending)
+              best=matches[mi];
+              break;
+            }
+            if(matches[mi].status!=='pending'){
+              best=matches[mi];
+              break;
             }
           }
         }
-        if(dateMatch) return {req:r, index:rr, status:'approved'};
+        return best;
       }
       // LIVE FIX: Check localStorage last denied marker - if admin denied, force denied even if reqs array still pending
       try{
