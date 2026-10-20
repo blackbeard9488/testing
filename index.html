@@ -99,7 +99,43 @@ document.addEventListener('keydown', function(e){ if(e.key==='Escape'){ const m=
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
-<script>window.addEventListener("unhandledrejection", function(e){ if(e.reason && e.reason.message && e.reason.message.includes("message channel closed")){ e.preventDefault(); console.log("Suppressed extension error: message channel closed"); } });</script>
+<script>
+// FIX: Suppress Chrome extension "message channel closed" errors that flood console
+// This is caused by extensions (not our code) and is harmless
+(function(){
+  var originalError = console.error;
+  console.error = function(){
+    var msg = arguments[0] ? arguments[0].toString() : '';
+    if(msg.includes('message channel closed') || msg.includes('A listener indicated an asynchronous response')){
+      return;
+    }
+    return originalError.apply(console, arguments);
+  };
+  window.addEventListener('unhandledrejection', function(e){
+    if(e.reason && e.reason.message){
+      var msg = e.reason.message;
+      if(msg.includes('message channel closed') || msg.includes('A listener indicated an asynchronous response')){
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
+      }
+    }
+    if(e.reason && typeof e.reason === 'string' && e.reason.includes('message channel closed')){
+      e.preventDefault();
+      return false;
+    }
+  });
+  // Also suppress via window.onerror
+  var originalOnError = window.onerror;
+  window.addEventListener('error', function(e){
+    if(e.message && (e.message.includes('message channel closed') || e.message.includes('A listener indicated an asynchronous response'))){
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return true;
+    }
+  }, true);
+})();
+</script>
 <style id="hide-staff-totals">
 /* Hide totals from staff - only admin sees them */
 body.staff-view .daily-total-ft,
@@ -390,19 +426,42 @@ function isCasual(st){return st.employmentType==='casual'}
 const FIREBASE_DB_URL="https://testing-de079-default-rtdb.asia-southeast1.firebasedatabase.app";
 const FIREBASE_CONFIG={apiKey:"AIzaSy placeholder",authDomain:"testing-de079.firebaseapp.com",databaseURL:FIREBASE_DB_URL,projectId:"testing-de079",storageBucket:"testing-de079.appspot.com",messagingSenderId:"0",appId:"1:0:web:repco"};
 let db=null; try{ if(!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG); db=firebase.database(); }catch(e){ db=null; }
-const CLOUD_KEYS=['retail_roster_byFortnight_v1','retail_roster_users_v1','retail_roster_requests_v2','retail_roster_hidden_v1','retail_roster_hidden_shifts_v1','retail_roster_archive_v1','retail_roster_uploaded_excels_v1','repco_username','repco_currentRole','repco_logout_minutes','maintenance_mode','repco_maintenance_first_v1'];
+const CLOUD_KEYS=['retail_roster_byFortnight_v1','retail_roster_users_v1','retail_roster_requests_v2','retail_roster_hidden_v1','retail_roster_hidden_shifts_v1','retail_roster_archive_v1','retail_roster_uploaded_excels_v1','maintenance_mode','repco_maintenance_first_v1'];
 let cloudSaveTimer=null; let suppressCloudSave=false;
 function getAllState(){let o={}; CLOUD_KEYS.forEach(k=>{let v=safeGet(k); if(v!==null) o[k]=v;}); o._ts=Date.now(); o._build=BUILD_ID; return o;}
 
+
 function applyCloudState(state,isInitial){
   if(!state) return; 
-  suppressCloudSave=true; 
+  suppressCloudSave=true;
+  var SESSION_BLOCK=['repco_username','repco_currentRole','repco_last_activity','repco_last_login_ts','repco_logout_minutes'];
   CLOUD_KEYS.forEach(function(k){
+    if(SESSION_BLOCK.indexOf(k)!==-1) return;
     if(state[k]!==undefined){
-      try{localStorage.setItem(k,state[k]);}catch(e){} 
-      MEMORY_STORE[k]=state[k];
+      try{localStorage.setItem(k,state[k]);}catch(e){}
+      if(typeof MEMORY_STORE!=='undefined') MEMORY_STORE[k]=state[k];
     }
-  }); 
+  });
+  // Merge requests for cross-device: Daniel mobile -> admin desktop
+  if(state['retail_roster_requests_v2']!==undefined){
+    try{
+      var cloudReqs=null;
+      try{ cloudReqs=JSON.parse(state['retail_roster_requests_v2']); }catch(e){}
+      var localReqs=safeGetJSON('retail_roster_requests_v2',[]);
+      if(Array.isArray(cloudReqs) && cloudReqs.length>localReqs.length){
+        try{localStorage.setItem('retail_roster_requests_v2', JSON.stringify(cloudReqs));}catch(e){}
+        if(typeof MEMORY_STORE!=='undefined') MEMORY_STORE['retail_roster_requests_v2']=JSON.stringify(cloudReqs);
+      } else if(Array.isArray(cloudReqs)){
+        var merged=localReqs.slice();
+        var ids=localReqs.map(function(r){ return r.id; });
+        var added=false;
+        for(var i=0;i<cloudReqs.length;i++){
+          if(ids.indexOf(cloudReqs[i].id)===-1){ merged.push(cloudReqs[i]); added=true; }
+        }
+        if(added) safeSetJSON('retail_roster_requests_v2', merged);
+      }
+    }catch(e){ console.log('merge error', e); }
+  }
   suppressCloudSave=false; 
   if(isInitial){
     try{populateFortnightSelect();renderRosterSafe(); applyRoleVisibility();checkMaintenance(); updateRequestsBadge(); renderRequests(); renderMySchedule();}catch(e){}
@@ -411,24 +470,27 @@ function applyCloudState(state,isInitial){
     try{
       var mode=safeGet('maintenance_mode')==='true';
       if(mode){
-        var maintEl=document.getElementById('maintenance-main-v141');
-        if(maintEl && !maintEl.classList.contains('show')){
-          maintEl.classList.add('show');
-          document.body.classList.add('maintenance-active');
-          toast('Maintenance enabled from another device');
-        }
+        var el=document.getElementById('maintenance-main-v141');
+        if(el && !el.classList.contains('show')){ el.classList.add('show'); document.body.classList.add('maintenance-active'); toast('Maintenance enabled from another device'); }
       } else {
-        var maintEl=document.getElementById('maintenance-main-v141');
-        if(maintEl && maintEl.classList.contains('show')){
-          maintEl.classList.remove('show');
-          document.body.classList.remove('maintenance-active');
-          toast('Maintenance disabled - back online');
-          setTimeout(function(){ try{populateFortnightSelect();renderRosterSafe();}catch(e){} },200);
-        }
+        var el=document.getElementById('maintenance-main-v141');
+        if(el && el.classList.contains('show')){ el.classList.remove('show'); document.body.classList.remove('maintenance-active'); toast('Maintenance disabled'); setTimeout(function(){ try{populateFortnightSelect();renderRosterSafe();}catch(e){} },200); }
+      }
+    }catch(e){}
+    try{
+      var reqs=safeGetJSON('retail_roster_requests_v2',[]);
+      var pending=reqs.filter(function(r){ return r && r.status==='pending' && !r.readByAdmin; });
+      if(pending.length>0 && isManagerRole(getActualRole())){
+        updateRequestsBadge();
+        var btn=document.getElementById('btn-requests');
+        if(btn){ btn.style.background='#FFFBCC'; btn.style.border='3px solid #E30613'; }
+        toast('NEW REQUEST from '+pending[0].username+' - '+pending[0].shiftDate);
+        try{ document.title='('+pending.length+') REPCO ROSTER - NEW REQUEST'; }catch(e){}
       }
     }catch(e){}
   }
 }
+
 
 
 async function cloudLoad(){
@@ -953,7 +1015,142 @@ function renderRosterSafe(){
   document.querySelectorAll('.sec-head span:last-child').forEach(function(el){ if(el.textContent.indexOf('/')!==-1) el.textContent=cur.dates[0].date+' to '+cur.dates[cur.dates.length-1].date; });
 }
 
-function editStaffType(globalIdx){ if(!isManagerRole()) return; showCustomSelect('Set employment type for '+getCurrentFortnight().staff[globalIdx].firstName+' '+getCurrentFortnight().staff[globalIdx].lastName, ['Full time','Casual'], (choice)=>{ if(!choice) return; let norm=choice.toLowerCase().includes('casual')?'casual':'fulltime'; let fns=safeGetJSON('retail_roster_byFortnight_v1',[]); let fn=fns.find(f=>f.id===safeGet('retail_roster_currentFortnightId')); if(fn){ fn.staff[globalIdx].employmentType=norm; safeSetJSON('retail_roster_byFortnight_v1',fns); } toast(fn.staff[globalIdx].firstName+' set to '+norm+' - synced'); renderRosterSafe(); applyRoleVisibility(); }); }
+
+function editStaffType(globalIdx){
+  if(!isManagerRole(getActualRole())) return;
+  try{
+    var cur=getSelectedFortnight(); if(!cur) cur=getCurrentFortnight();
+    if(!cur || !cur.staff[globalIdx]){ toast('Staff not found'); return; }
+    var st=cur.staff[globalIdx];
+    var staffName=st.firstName+' '+st.lastName;
+    var staffUsername=st.username||'';
+    var html='<div style="font-size:11px"><b>'+st.lastName.toUpperCase()+', '+st.firstName+'</b> ('+staffUsername+')<br><br>'+
+      '<div style="margin:8px 0"><b>Employment Type:</b><br>'+
+      '<button onclick="setStaffEmploymentType('+globalIdx+', \'fulltime\')" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px;margin:4px">FULL TIME</button>'+
+      '<button onclick="setStaffEmploymentType('+globalIdx+', \'casual\')" style="background:#fff;border:2px solid #111;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px;margin:4px">CASUAL</button></div>'+
+      '<div style="margin:12px 0;padding:10px;background:#FFEB3B;border:2px solid #111;border-radius:12px"><b style="color:#E30613">DANGER ZONE - LIVE DELETE</b><br><small>Delete from roster - synced live to all devices</small><br>'+
+      '<button onclick="deleteStaffFromRoster('+globalIdx+', false)" style="background:#E30613;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px;margin:4px">DELETE FROM THIS ROSTER ONLY</button><br>'+
+      '<button onclick="deleteStaffFromRoster('+globalIdx+', true)" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px;margin:4px;border:2px solid #E30613">DELETE FROM ALL ROSTERS (LIVE)</button></div>'+
+      '</div>';
+    showCustomConfirm('Manage Staff: '+staffName, html, function(confirmed){
+      // This is just the container, buttons handle actions themselves
+    });
+    // Override confirm button to just close
+    setTimeout(function(){
+      var modals=document.querySelectorAll('.custom-modal button, #custom-confirm-container button');
+      for(var i=0;i<modals.length;i++){
+        var btn=modals[i];
+        var txt=btn.textContent.toUpperCase();
+        if(txt.includes('CONFIRM') || txt.includes('OK')){
+          btn.textContent='CLOSE';
+          btn.style.background='#111';
+          btn.style.color='#fff';
+        }
+      }
+    },100);
+  }catch(e){ console.error(e); toast('Error: '+e.message); }
+}
+function setStaffEmploymentType(globalIdx, type){
+  try{
+    var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+    var curId=safeGet('retail_roster_currentFortnightId');
+    var fn=fns.find(function(f){ return f.id===curId; });
+    if(!fn){ toast('Roster not found'); return; }
+    if(!fn.staff[globalIdx]){ toast('Staff not found'); return; }
+    fn.staff[globalIdx].employmentType=type;
+    fn.staff[globalIdx].type=type;
+    safeSetJSON('retail_roster_byFortnight_v1', fns);
+    // Also update user record
+    var users=safeGetJSON('retail_roster_users_v1',[]);
+    var st=fn.staff[globalIdx];
+    var uIdx=users.findIndex(function(u){ return u.username && st.username && u.username.toLowerCase()===st.username.toLowerCase(); });
+    if(uIdx>=0){
+      users[uIdx].employmentType=type;
+      users[uIdx].type=type;
+      safeSetJSON('retail_roster_users_v1', users);
+    }
+    renderRosterSafe();
+    try{ debouncedCloudSave(); }catch(e){}
+    try{ cloudSave(); }catch(e){}
+    // Close modal
+    var modals=document.querySelectorAll('.custom-modal, #custom-confirm-container, .modal-overlay, #custom-confirm-overlay');
+    for(var j=0;j<modals.length;j++){ try{ if(modals[j].id && modals[j].id.includes('confirm')) modals[j].style.display='none'; else modals[j].remove(); }catch(e){} }
+    var overlay=document.getElementById('custom-confirm-overlay'); if(overlay) overlay.style.display='none';
+    toast('Set '+st.firstName+' to '+type.toUpperCase()+' - LIVE synced');
+  }catch(e){ toast('Error: '+e.message); }
+}
+function deleteStaffFromRoster(globalIdx, fromAll){
+  try{
+    var cur=getSelectedFortnight(); if(!cur) cur=getCurrentFortnight();
+    if(!cur || !cur.staff[globalIdx]){ toast('Staff not found'); return; }
+    var st=cur.staff[globalIdx];
+    var staffName=st.firstName+' '+st.lastName;
+    var username=st.username||'';
+    var confirmMsg=fromAll ? 
+      '<div style="font-size:11px"><b style="color:#E30613">DELETE '+staffName.toUpperCase()+' FROM ALL ROSTERS? (LIVE)</b><br><br>This will permanently delete '+staffName+' from EVERY fortnight roster.<br><br>Username: '+username+'<br><br><b>This is synced LIVE to all devices immediately.</b><br><br>This cannot be undone - you will need to re-add via Hidden Staff or import.</div>' :
+      '<div style="font-size:11px"><b>Delete '+staffName+' from THIS roster only?</b><br><br>Roster: '+cur.label+'<br>Staff: '+staffName+' ('+username+')<br><br>This will remove them from current fortnight only.<br><br>Synced LIVE.</div>';
+    showCustomConfirm(fromAll ? 'DELETE FROM ALL ROSTERS - LIVE' : 'Delete from this roster', confirmMsg, function(confirmed){
+      if(!confirmed) return;
+      try{
+        var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+        if(fromAll){
+          // Delete from ALL rosters
+          var deletedCount=0;
+          for(var f=0;f<fns.length;f++){
+            var fn=fns[f];
+            if(!fn.staff) continue;
+            var before=fn.staff.length;
+            fn.staff=fn.staff.filter(function(s){
+              if(username && s.username) return s.username.toLowerCase()!==username.toLowerCase();
+              return !(s.firstName===st.firstName && s.lastName===st.lastName);
+            });
+            if(fn.staff.length<before) deletedCount++;
+          }
+          safeSetJSON('retail_roster_byFortnight_v1', fns);
+          // Also remove from hidden staff list if exists
+          var hidden=safeGetJSON('retail_roster_hidden_staff_v1',[]);
+          hidden=hidden.filter(function(h){
+            if(username && h.username) return h.username.toLowerCase()!==username.toLowerCase();
+            return !(h.firstName===st.firstName && h.lastName===st.lastName);
+          });
+          safeSetJSON('retail_roster_hidden_staff_v1', hidden);
+          renderRosterSafe();
+          try{ debouncedCloudSave(); }catch(e){}
+          try{ cloudSave(); }catch(e){}
+          // Force immediate cloud push for LIVE
+          try{
+            var state=getAllState();
+            safeSet('repco_cloud_ts', String(state._ts||Date.now()));
+            if(typeof db!=='undefined' && db){
+              db.ref('repco_state').set(state);
+            } else {
+              fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
+            }
+          }catch(e){}
+          toast('DELETED '+staffName+' from ALL '+deletedCount+' rosters - LIVE synced to all devices');
+        } else {
+          // Delete from current roster only
+          var curId=safeGet('retail_roster_currentFortnightId');
+          var fn=fns.find(function(f){ return f.id===curId; });
+          if(fn){
+            fn.staff.splice(globalIdx,1);
+            safeSetJSON('retail_roster_byFortnight_v1', fns);
+            renderRosterSafe();
+            try{ debouncedCloudSave(); }catch(e){}
+            try{ cloudSave(); }catch(e){}
+            try{
+              var state=getAllState();
+              if(typeof db!=='undefined' && db) db.ref('repco_state').set(state);
+              else fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
+            }catch(e){}
+            toast('Deleted '+staffName+' from '+fn.label+' - LIVE synced');
+          }
+        }
+      }catch(e){ toast('Delete error: '+e.message); console.error(e); }
+    });
+  }catch(e){ toast('Error: '+e.message); }
+}
+
 
 
 
