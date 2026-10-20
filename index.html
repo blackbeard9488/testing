@@ -580,7 +580,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_DENY_LIVE_V80";
+const BUILD_ID="20261022690000_FIX_DENY_DATE_V81";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -4826,17 +4826,36 @@ function renderMySchedule(){
                 var cloudUser=(cr.username||'').toLowerCase();
                 if(lReqs[idx].id===cr.id){
                   if(!localUser || !cloudUser || localUser===cloudUser || !myUser || localUser===myUser){
-                    console.log('IMMEDIATE LIVE: Found denied via', source, cr.id, 'for', cr.username, 'pending->denied - AUTO FIX');
+                    console.log('IMMEDIATE LIVE: Found denied via', source, cr.id, 'for', cr.username, 'pending->denied - AUTO FIX (ID match)');
                     lReqs[idx]=cr;
                     hasUpdate=true;
+                  }
+                }
+              } else {
+                // Also check by date+username if ID not found - handles case where pending ID differs from denied ID (e.g., old code)
+                for(var j=0;j<lReqs.length;j++){
+                  var lr=lReqs[j];
+                  if(!lr || lr.status!=='pending') continue;
+                  var lrDate=(lr.shiftDate||'').split(' ')[0];
+                  var crDate=(cr.shiftDate||'').split(' ')[0];
+                  var m1=lr.shiftDate?lr.shiftDate.match(/(\d{1,2}\/\d{1,2})/):null;
+                  var m2=cr.shiftDate?cr.shiftDate.match(/(\d{1,2}\/\d{1,2})/):null;
+                  var lrKey=(lr.username||'').toLowerCase()+'|'+(m1?m1[1]:lrDate);
+                  var crKey=(cr.username||'').toLowerCase()+'|'+(m2?m2[1]:crDate);
+                  if(lrKey===crKey){
+                    console.log('IMMEDIATE LIVE: Found denied via', source, cr.id, 'for', cr.username, 'pending->denied by DATE match', lrKey, '- AUTO FIX');
+                    lReqs[j]=cr;
+                    hasUpdate=true;
+                    break;
                   }
                 }
               }
             }
             if(hasUpdate){
               safeSetJSON('retail_roster_requests_v2', lReqs);
-              console.log('IMMEDIATE LIVE: Updated from', source, 're-rendering My Schedule');
+              console.log('IMMEDIATE LIVE: Updated from', source, 're-rendering My Schedule - Daniel will see DENIED');
               try{ renderMySchedule(); }catch(e){}
+              try{ renderRequests(); }catch(e){}
               toast('Live: Request '+source+' denied by admin');
             }
           }catch(e){ console.error('overwrite error', e); }
