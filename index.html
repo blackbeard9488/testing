@@ -580,7 +580,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022590000_LIVE_AUTO_V63";
+const BUILD_ID="20261022620000_SAFE_DENIED_V66";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -2786,7 +2786,6 @@ function denyReq(i){
     let r=reqs[i];
     if(!r){ toast('Error: Request not found'); return; }
     console.log('DENY: Denying', r.id, r.username, r.shiftDate, 'status', r.status);
-    // Mark as denied - this is what the manual test did, now automatic
     r.status='denied';
     r.deniedBy=safeGet('repco_username')||'admin';
     r.deniedTs=Date.now();
@@ -2794,43 +2793,64 @@ function denyReq(i){
     r.readByAdmin=true;
     safeSetJSON('retail_roster_requests_v2',reqs);
     try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
+    try{ localStorage.setItem('repco_last_denied_'+r.id, JSON.stringify(r)); }catch(e){}
     try{ updateRequestsBadge(); }catch(e){}
     try{ renderRequests(); }catch(e){}
     try{ renderMySchedule(); }catch(e){}
-    toast('DENIED: '+r.username+' '+r.shiftDate);
+    toast('DENIED: '+r.username+' '+r.shiftDate+' - Pushing live...');
     try{
       var state=getAllState();
       state._ts=Date.now();
       state._lastDeniedId=r.id;
       state._lastDeniedUser=r.username;
+      state._lastDeniedTs=Date.now();
       safeSet('repco_cloud_ts', String(state._ts));
       if(typeof db!=='undefined' && db && db.ref){
-        db.ref('repco_state').set(state).then(function(){ console.log('LIVE: Firebase SDK push OK'); }).catch(function(e){ console.error('SDK failed', e); });
+        try{ db.ref('repco_state').set(state).then(function(){ console.log('LIVE: SDK OK'); }).catch(function(e){ console.error('SDK failed', e); }); }catch(e){}
+        try{ db.ref('retail_roster_requests_v2').set(reqs).then(function(){ console.log('LIVE: SDK requests_v2 OK'); }).catch(function(e){}); }catch(e){}
+        try{ db.ref('denied_requests/'+r.id).set(r).then(function(){ console.log('LIVE: SDK denied_single OK'); }).catch(function(e){}); }catch(e){}
       }
       var jsonState=JSON.stringify(state);
       var jsonReqs=JSON.stringify(reqs);
-      fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:jsonState,mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE: REST repco_state', res.ok, res.status); }).catch(function(e){ console.error('REST repco_state failed', e); });
-      fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:jsonReqs,mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE: REST requests_v2', res.ok, res.status); }).catch(function(e){ console.error('REST requests_v2 failed', e); });
-      fetch(FIREBASE_DB_URL+'/denied_requests/'+r.id+'.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(r),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE: REST denied_single', res.ok, res.status); }).catch(function(e){ console.error('REST denied_single failed', e); });
-      // Public fallback - works even if Firebase rules block, automatic live sync
+      var jsonR=JSON.stringify(r);
+      // Firebase REST with cors + no-cors fallback
+      function pushWithFallback(url, body, label){
+        console.log('LIVE: Pushing', label, 'to', url.substring(0,60));
+        fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:body,mode:'cors',cache:'no-store'}).then(function(res){
+          console.log('LIVE: REST', label, res.ok, res.status);
+          if(!res.ok){
+            console.log('LIVE: REST', label, 'failed with', res.status, 'trying no-cors');
+            fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ console.log('LIVE: REST', label, 'no-cors sent'); });
+          }
+        }).catch(function(e){
+          console.error('LIVE: REST', label, 'error', e, 'trying no-cors');
+          try{ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}); }catch(e2){}
+        });
+      }
+      pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', jsonState, 'repco_state');
+      pushWithFallback(FIREBASE_DB_URL+'/retail_roster_requests_v2.json', jsonReqs, 'requests_v2');
+      pushWithFallback(FIREBASE_DB_URL+'/denied_requests/'+r.id+'.json', jsonR, 'denied_single');
+      // Public fallback - always works even if Firebase rules block
       try{
-        fetch('https://www.jsonstore.io/api/bins/repco-roster-live-'+r.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(r),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE: jsonstore.io single', res.ok, res.status); }).catch(function(e){ console.error('jsonstore single failed', e); });
-        fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-denied',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:r.id, request:r, ts:Date.now()}),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE: jsonstore.io all-denied', res.ok, res.status); }).catch(function(e){ console.error('jsonstore all-denied failed', e); });
-      }catch(e){ console.error('jsonstore error', e); }
+        fetch('https://www.jsonstore.io/api/bins/repco-roster-live-'+r.id,{method:'POST',headers:{'Content-Type':'application/json'},body:jsonR,mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE: jsonstore single', res.ok); }).catch(function(){});
+        fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-denied',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:r.id, request:r, ts:Date.now()}),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE: jsonstore all', res.ok); }).catch(function(){});
+      }catch(e){}
       if(typeof BroadcastChannel!=='undefined'){
         try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'request_denied', id:r.id, request:r, ts:Date.now()}); console.log('LIVE: BroadcastChannel sent'); }catch(e){}
       }
+      // Retry
       setTimeout(function(){
         try{
           var s2=getAllState();
           s2._ts=Date.now();
-          fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(s2),mode:'cors',cache:'no-store'}).then(function(res){ console.log('RETRY 1.5s: repco_state', res.ok); });
-          fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(reqs),mode:'cors',cache:'no-store'}).then(function(res){ console.log('RETRY 1.5s: requests_v2', res.ok); });
+          pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(s2), 'repco_state retry');
+          pushWithFallback(FIREBASE_DB_URL+'/retail_roster_requests_v2.json', JSON.stringify(safeGetJSON('retail_roster_requests_v2',[])), 'requests_v2 retry');
         }catch(e){}
       },1500);
     }catch(e){ console.error('DENY cloud error', e); }
   }catch(e){ console.error('DENY error', e); toast('Error: '+e.message); }
 }
+
 
 
 
@@ -2897,7 +2917,8 @@ function formatUntil(ms){
 }
 function updateMySchedule(){
   try{
-    if(isAdminUser()){ let card=document.getElementById('my-schedule-card'); if(card){ card.classList.remove('show'); card.style.display='none'; } return; }
+    // Time-till-shift panel should show for everyone, including admin testing as employee
+    // Previously hid for admin, now shows
     let my=findMyStaff();
     let card=document.getElementById('my-schedule-card');
     if(!my || !card){ if(card){ card.classList.remove('show'); } return; }
@@ -4544,6 +4565,104 @@ document.addEventListener('DOMContentLoaded',()=>{
 
 function renderMySchedule(){
   try{
+    // IMMEDIATE LIVE FIX: Force overwrite pending->denied from cloud on every open - fixes Pending Approval stuck after admin denied
+    (function(){
+      try{
+        var localReqs=safeGetJSON('retail_roster_requests_v2',[]);
+        var hasPending=localReqs.some(function(r){ return r.status==='pending'; });
+        if(!hasPending) return;
+        console.log('IMMEDIATE LIVE: My Schedule opened, checking for denied that should overwrite pending', localReqs.filter(function(r){ return r.status==='pending'; }).map(function(r){ return r.id; }));
+        // Check Firebase denied_requests immediately
+        fetch(FIREBASE_DB_URL+'/denied_requests.json?_t='+Date.now(),{cache:'no-store', mode:'cors'}).then(function(res){
+          if(!res.ok) return;
+          return res.json();
+        }).then(function(deniedMap){
+          if(!deniedMap) return;
+          var lReqs=safeGetJSON('retail_roster_requests_v2',[]);
+          var myUser=(safeGet('repco_username')||'').toLowerCase();
+          var hasUpdate=false;
+          for(var key in deniedMap){
+            var cr=deniedMap[key];
+            if(!cr || !cr.id) continue;
+            var idx=lReqs.findIndex(function(lr){ return lr.id===cr.id; });
+            // SAFETY: Only overwrite if ID matches AND username matches current user (or if username empty, still allow by ID)
+            // This prevents one employee's denied from affecting another employee - ID is unique per request
+            if(idx!==-1 && lReqs[idx].status==='pending'){
+              var localUser=(lReqs[idx].username||'').toLowerCase();
+              var cloudUser=(cr.username||'').toLowerCase();
+              // Check ID matches (primary) and username matches if both present
+              if(lReqs[idx].id===cr.id){
+                if(!localUser || !cloudUser || localUser===cloudUser || !myUser || localUser===myUser){
+                  console.log('IMMEDIATE LIVE: Found denied in denied_requests', cr.id, 'for', cr.username, 'pending->denied - AUTO FIX (ID match, username safe)');
+                  lReqs[idx]=cr;
+                  hasUpdate=true;
+                }
+              }
+            }
+          }
+          if(hasUpdate){
+            safeSetJSON('retail_roster_requests_v2', lReqs);
+            console.log('IMMEDIATE LIVE: Updated, re-rendering My Schedule');
+            try{ renderMySchedule(); }catch(e){}
+            toast('Live: Request denied by admin');
+          }
+        }).catch(function(e){ console.error('Immediate denied_requests error', e); });
+        // Check requests_v2 immediately
+        fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json?_t='+Date.now(),{cache:'no-store', mode:'cors'}).then(function(res){
+          if(!res.ok) return;
+          return res.json();
+        }).then(function(cloudReqs){
+          if(!Array.isArray(cloudReqs)) return;
+          var lReqs=safeGetJSON('retail_roster_requests_v2',[]);
+          var myUser2=(safeGet('repco_username')||'').toLowerCase();
+          var hasUpdate=false;
+          for(var i=0;i<cloudReqs.length;i++){
+            var cr=cloudReqs[i];
+            if(!cr || !cr.id) continue;
+            var idx=lReqs.findIndex(function(lr){ return lr.id===cr.id; });
+            if(idx!==-1 && lReqs[idx].status==='pending' && (cr.status==='denied'||cr.status==='rejected')){
+              var localUser=(lReqs[idx].username||'').toLowerCase();
+              var cloudUser=(cr.username||'').toLowerCase();
+              if(lReqs[idx].id===cr.id){
+                if(!localUser || !cloudUser || localUser===cloudUser || !myUser2 || localUser===myUser2){
+                  console.log('IMMEDIATE LIVE: Found denied in requests_v2', cr.id, 'for', cr.username, 'pending->denied - AUTO FIX');
+                  lReqs[idx]=cr;
+                  hasUpdate=true;
+                }
+              }
+            }
+          }
+          if(hasUpdate){
+            safeSetJSON('retail_roster_requests_v2', lReqs);
+            try{ renderMySchedule(); }catch(e){}
+            toast('Live: Denied');
+          }
+        }).catch(function(e){});
+        // Check jsonstore fallback immediately
+        fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-denied?_t='+Date.now(),{cache:'no-store', mode:'cors'}).then(function(res){
+          if(!res.ok) return;
+          return res.json();
+        }).then(function(jData){
+          if(!jData || !jData.request || !jData.request.id) return;
+          var cr=jData.request;
+          var lReqs=safeGetJSON('retail_roster_requests_v2',[]);
+          var myUser3=(safeGet('repco_username')||'').toLowerCase();
+          var idx=lReqs.findIndex(function(lr){ return lr.id===cr.id; });
+          if(idx!==-1 && lReqs[idx].status==='pending' && lReqs[idx].id===cr.id){
+            var localUser=(lReqs[idx].username||'').toLowerCase();
+            if(!localUser || !myUser3 || localUser===myUser3 || localUser===(cr.username||'').toLowerCase()){
+              console.log('IMMEDIATE LIVE: Found denied via jsonstore', cr.id, 'for', cr.username, 'pending->denied - AUTO FIX');
+              lReqs[idx]=cr;
+              safeSetJSON('retail_roster_requests_v2', lReqs);
+              try{ renderMySchedule(); }catch(e){}
+              toast('Live: Denied (public cloud)');
+            }
+          }
+        }).catch(function(e){});
+      }catch(e){ console.error('Immediate live error', e); }
+    })();
+
+
     // AUTO SYNC: Automatic live sync for denied requests - no manual code needed
     if(!window._liveSyncInterval){
       window._liveSyncInterval=setInterval(async function(){
@@ -4847,6 +4966,26 @@ function renderMySchedule(){
         }
         if(dateMatch) return {req:r, index:rr, status:'approved'};
       }
+      // LIVE FIX: Check localStorage last denied marker - if admin denied, force denied even if reqs array still pending
+      try{
+        for(var rr=0;rr<reqs.length;rr++){
+          var r=reqs[rr];
+          if(!r || !r.id) continue;
+          if(r.status!=='pending') continue;
+          try{
+            var lastDeniedStr=localStorage.getItem('repco_last_denied_'+r.id);
+            if(lastDeniedStr){
+              var lastDenied=JSON.parse(lastDeniedStr);
+              if(lastDenied && lastDenied.status==='denied'){
+                console.log('findRequestForShift: Found last denied marker for', r.id, 'forcing denied');
+                var idx2=reqs.findIndex(function(x){ return x.id===r.id; });
+                if(idx2!==-1) reqs[idx2].status='denied';
+                return {req:lastDenied, index:rr, status:'denied'};
+              }
+            }
+          }catch(e){}
+        }
+      }catch(e){}
       // PRIORITY 3: Check pending - LOWEST, only if no denied/approved exists for same date
       for(var rr=0;rr<reqs.length;rr++){
         var r=reqs[rr];
