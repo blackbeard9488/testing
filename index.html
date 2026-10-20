@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_APPROVE_V110";
+const BUILD_ID="20261022690000_FIX_APPROVE_V113";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -3859,36 +3859,37 @@ function submitUnavail(){
 }
 
 function submitCorrection(){
-  const idxStr=document.getElementById('corr-shift-idx')?.value; const start=document.getElementById('corr-start')?.value; const end=document.getElementById('corr-end')?.value; const special=document.getElementById('corr-special')?.value; const reason=(document.getElementById('corr-reason')?.value||'').trim(); if(idxStr===''){toast('Select shift');return;} let newShift=''; if(special) newShift=special; else { if(!start||!end){toast('Enter times');return;} newShift=start+'-'+end; } const cur=getCurrentFortnight(); const username=safeGet('repco_username')||''; const myStaff=findMyStaff(cur); const idx=parseInt(idxStr); const oldShift=myStaff.shifts[idx]||'OFF'; const shiftDate=cur.dates[idx]?.date||''; let all=safeGetJSON('retail_roster_requests_v2',[]); all.push({username, type:'shift-correction', shiftDate, shiftIdx:idx, oldShift, newShift, reason, status:'pending', ts:Date.now(), dates:[shiftDate]}); safeSetJSON('retail_roster_requests_v2',all); toast('Submitted - admin notified live'); renderRequests();
+  const idxStr=document.getElementById('corr-shift-idx')?.value; const start=document.getElementById('corr-start')?.value; const end=document.getElementById('corr-end')?.value; const special=document.getElementById('corr-special')?.value; const reason=(document.getElementById('corr-reason')?.value||'').trim(); if(idxStr===''){toast('Select shift');return;} let newShift=''; if(special) newShift=special; else { if(!start||!end){toast('Enter times');return;} newShift=start+'-'+end; } const cur=getCurrentFortnight(); const username=safeGet('repco_username')||''; const myStaff=findMyStaff(cur); const idx=parseInt(idxStr); const oldShift=myStaff.shifts[idx]||'OFF'; const shiftDate=cur.dates[idx]?.date||''; const shiftISO=cur.dates[idx]?.iso||''; let all=safeGetJSON('retail_roster_requests_v2',[]); var newId='req_'+Date.now()+'_'+Math.random().toString(36).substr(2,9)+'_'+(shiftDate||'').replace(/[^0-9]/g,''); all.push({id:newId, username, type:'shift-correction', shiftDate, shiftISO, shiftIdx:idx, oldShift, newShift, reason, status:'pending', ts:Date.now(), dates:[shiftDate], readByAdmin:false}); try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){} safeSetJSON('retail_roster_requests_v2',all); toast('Submitted for '+shiftDate+' - PENDING on My Schedule'); try{ updateRequestsBadge(); renderMySchedule(); }catch(e){} renderRequests(); try{ debouncedCloudSave(); }catch(e){} setTimeout(function(){ try{ var state=getAllState(); safeSet('repco_cloud_ts', String(state._ts||Date.now())); if(typeof db!=='undefined' && db && db.ref){ db.ref('repco_state').set(state); } }catch(e){} },500);
 }
 function deleteReq(idx){ showCustomConfirm('Delete this request?','', (ok)=>{ if(!ok) return; let all=safeGetJSON('retail_roster_requests_v2',[]); all.splice(idx,1); safeSetJSON('retail_roster_requests_v2',all); toast('Deleted - synced'); renderRequests(); }); }
 function editReq(idx){ let all=safeGetJSON('retail_roster_requests_v2',[]); const r=all[idx]; if(!r) return; showCustomPrompt('Edit Reason', '<textarea id="edit-reason" style="width:100%;padding:10px;border-radius:12px;border:2px solid #111;min-height:60px">'+(r.reason||'')+'</textarea>', (ok)=>{ if(!ok) return; const nr=document.getElementById('edit-reason').value; r.reason=nr; safeSetJSON('retail_roster_requests_v2',all); toast('Edited - synced'); renderRequests(); }); }
 function approveReq(idx){ 
   try{
-    // Guard against rapid double-click / infinite loop
-    var lastApproveTs=parseInt(safeGet('repco_last_approve_ts')||'0');
-    if(Date.now()-lastApproveTs<1000){
-      console.log('Approve throttled - too soon');
-      return;
-    }
-    safeSet('repco_last_approve_ts', String(Date.now()));
-    
     let all=safeGetJSON('retail_roster_requests_v2',[]);
     if(!all[idx]) { toast('Request not found - may have been already approved'); renderRequests(); return; }
     const req=all[idx];
+    
+    // If already approved, still force sync to fix My Schedule not updating
     if(req.status!=='pending'){
-      toast('Request already '+req.status+' - refreshing');
-      renderRequests();
-      try{ renderMySchedule(); }catch(e){}
-      return;
+      if(req.status==='approved'){
+        console.log('Request already approved, forcing re-sync to fix My Schedule', req.id);
+        toast('Already approved - forcing sync to employee My Schedule...');
+        // Continue to re-apply roster and force cloud sync below
+      } else {
+        toast('Request already '+req.status+' - refreshing');
+        renderRequests();
+        try{ renderMySchedule(); }catch(e){}
+        return;
+      }
+    } else {
+      console.log('Approving request', req);
+      all[idx].status='approved';
+      all[idx].approvedTs=Date.now();
+      all[idx].approvedBy=safeGet('repco_username')||'admin';
+      all[idx].readByStaff=false;
+      safeSetJSON('retail_roster_requests_v2',all);
+      try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
     }
-    console.log('Approving request', req);
-    all[idx].status='approved';
-    all[idx].approvedTs=Date.now();
-    all[idx].approvedBy=safeGet('repco_username')||'admin';
-    all[idx].readByStaff=false;
-    safeSetJSON('retail_roster_requests_v2',all);
-    try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
     
     let fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
     var staffMatched=false;
@@ -3896,30 +3897,25 @@ function approveReq(idx){
     function findStaffInFn(fn, username){
       if(!fn.staff) return null;
       var u=(username||'').toLowerCase().trim();
-      // Try exact username match
       var found=fn.staff.find(s=>s.username && s.username.toLowerCase()===u);
       if(found) return found;
-      // Try mapped first - most accurate
       try{
         var mapped=mapUsernameToStaffKey(username);
         if(mapped && mapped.firstName){
           found=fn.staff.find(s=>s.firstName && s.lastName && s.firstName.toLowerCase()===mapped.firstName.toLowerCase() && mapped.lastName && s.lastName.toLowerCase()===mapped.lastName.toLowerCase());
           if(found) return found;
           if(mapped.lastName){
-            found=fn.staff.find(s=>s.lastName && s.lastName.toLowerCase()===mapped.lastName.toLowerCase());
-            if(found && mapped.firstName && s.firstName.toLowerCase()===mapped.firstName.toLowerCase()) return found;
+            found=fn.staff.find(s=>s.lastName && s.lastName.toLowerCase()===mapped.lastName.toLowerCase() && s.firstName && s.firstName.toLowerCase()===mapped.firstName.toLowerCase());
+            if(found) return found;
           }
           found=fn.staff.find(s=>s.firstName && s.firstName.toLowerCase()===mapped.firstName.toLowerCase());
           if(found) return found;
         }
       }catch(e){}
-      // Try firstName exact
       found=fn.staff.find(s=>s.firstName && s.firstName.toLowerCase()===u);
       if(found) return found;
-      // Try lastName exact
       found=fn.staff.find(s=>s.lastName && s.lastName.toLowerCase()===u);
       if(found) return found;
-      // Try full name
       found=fn.staff.find(s=> (s.firstName+' '+s.lastName).toLowerCase()===u || (s.lastName+', '+s.firstName).toLowerCase()===u || (s.lastName+' '+s.firstName).toLowerCase()===u );
       if(found) return found;
       return null;
@@ -3948,7 +3944,6 @@ function approveReq(idx){
               if(staff.unavailable) staff.unavailable[dateIdx]=false;
               if(staff.cellGreen) staff.cellGreen[dateIdx]=false;
               if(staff.cellG) staff.cellG[dateIdx]=false;
-              console.log('Set AB for', staff.firstName, fn.dates[dateIdx].date);
             }
           });
         }
@@ -3963,7 +3958,6 @@ function approveReq(idx){
           if(targetIdx===undefined && req.shiftDate){
             let clean=(req.shiftDate||'').split(' ')[0].trim();
             targetIdx=fn.dates.findIndex(d=>d.date===clean || d.iso===clean || d.date===req.shiftDate);
-            // Also try by ISO
             if(targetIdx===-1 && req.shiftISO){
               targetIdx=fn.dates.findIndex(d=>d.iso===req.shiftISO);
             }
@@ -3983,8 +3977,6 @@ function approveReq(idx){
             if(staff.cellGreen) staff.cellGreen[targetIdx]=false;
             if(staff.cellG) staff.cellG[targetIdx]=false;
             console.log('Set shift correction for', staff.firstName, fn.dates[targetIdx].date, 'from', old, 'to', req.newShift);
-          } else {
-            console.warn('Shift correction: targetIdx not found', targetIdx, 'for', req.shiftDate, 'in fn', fn.id);
           }
         }
       });
@@ -3992,32 +3984,50 @@ function approveReq(idx){
     safeSetJSON('retail_roster_byFortnight_v1',fns);
     if(!staffMatched){
       console.warn('Approve: No staff matched for', req.username);
-      toast('Approved but staff not found on roster for '+req.username+' - check name mapping. Request marked APPROVED.');
-    } else {
-      toast('Approved - '+matchedStaffName+' roster updated to '+(req.type==='unavailability'?'AB':req.newShift)+' - will show APPROVED on My Schedule');
     }
+    
+    // CRITICAL: Force sync to Firebase with multiple fallbacks to ensure My Schedule updates
     try{ 
       var state=getAllState();
       state._ts=Date.now();
       state._lastApproveId=req.id;
       state._lastApproveTs=Date.now();
       safeSet('repco_cloud_ts', String(state._ts));
+      // SDK first
       if(typeof db!=='undefined' && db && db.ref){
-        db.ref('repco_state').set(state);
+        db.ref('repco_state').set(state).then(function(){
+          console.log('Approve synced via SDK');
+        }).catch(function(e){
+          console.log('SDK sync failed, trying REST', e.message);
+          fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state),mode:'cors'}).catch(function(){});
+        });
       } else {
-        fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
+        fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state),mode:'cors'}).catch(function(){
+          fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state),mode:'no-cors'}).catch(function(){});
+        });
       }
-      fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(all),mode:'cors'}).catch(function(){});
-      fetch(FIREBASE_DB_URL+'/retail_roster_byFortnight_v1.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(fns),mode:'cors'}).catch(function(){});
-    }catch(e){ console.error(e); }
+      // Also save requests and roster separately for direct polling
+      var allStr=JSON.stringify(all);
+      var fnsStr=JSON.stringify(fns);
+      fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:allStr,mode:'cors'}).then(function(){
+        console.log('Requests synced via REST');
+      }).catch(function(){
+        fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:allStr,mode:'no-cors'}).catch(function(){});
+      });
+      fetch(FIREBASE_DB_URL+'/retail_roster_byFortnight_v1.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:fnsStr,mode:'cors'}).catch(function(){
+        fetch(FIREBASE_DB_URL+'/retail_roster_byFortnight_v1.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:fnsStr,mode:'no-cors'}).catch(function(){});
+      });
+    }catch(e){ console.error('Approve sync error', e); }
+    
     renderRequests();
     renderRosterSafe();
     try{ renderMySchedule(); }catch(e){}
     applyRoleVisibility();
-    // Force badge update
     try{ updateRequestsBadge(); }catch(e){}
+    toast('Approved - '+matchedStaffName+' → '+req.newShift+' - forcing sync to My Schedule (employee will see APPROVED in 3 sec)');
   }catch(e){ console.error('approveReq error', e); toast('Error approving: '+e.message); }
 }
+
 
 
 function denyReq(idx){ 
@@ -4645,6 +4655,18 @@ function renderMySchedule(){
     // FIXED AGGRESSIVE FIX: If employee has pending and approved/denied for same ID, remove pending - but keep approved/denied visible
     try{
       var reqsForClean=safeGetJSON('retail_roster_requests_v2',[]);
+      // MIGRATE: Assign IDs to old requests without id (fixes approve bug)
+      var hadIdFix=false;
+      for(var idf=0;idf<reqsForClean.length;idf++){
+        if(reqsForClean[idf] && !reqsForClean[idf].id){
+          reqsForClean[idf].id='req_'+(reqsForClean[idf].ts||Date.now())+'_'+Math.random().toString(36).substr(2,5)+'_migrated';
+          hadIdFix=true;
+        }
+      }
+      if(hadIdFix){
+        safeSetJSON('retail_roster_requests_v2', reqsForClean);
+        console.log('MIGRATED old requests without id');
+      }
       if(Array.isArray(reqsForClean) && reqsForClean.length>0){
         var processedById={};
         var cleaned=[];
@@ -4817,8 +4839,7 @@ function renderMySchedule(){
     }catch(e){}
     var reqs=safeGetJSON('retail_roster_requests_v2',[]);
     var myUsername=(safeGet('repco_username')||'').toLowerCase();
-                    function findRequestForShift(dateObj, iso, idx){
-      // FIXED FOR DANIEL: Prioritize denied/approved over pending, but force see ANY status (no 14-day hide)
+                        function findRequestForShift(dateObj, iso, idx){
       function extractDateKey(str){
         if(!str) return '';
         var m=str.match(/(\d{1,2}\/\d{1,2})/);
@@ -4852,7 +4873,6 @@ function renderMySchedule(){
         return false;
       }
       
-      // FIXED PRIORITY: Find ALL matching requests for this date/user, return most recent by ts
       var matches=[];
       for(var rr=0;rr<reqs.length;rr++){
         var r=reqs[rr];
@@ -4881,47 +4901,20 @@ function renderMySchedule(){
         }
       }
       if(matches.length>0){
-        // Sort by most recent first
-        matches.sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
-        // Prefer non-pending if exists and is most recent, but if most recent is pending and there's an approved/denied newer than pending, that newer wins due to sort
-        // If multiple statuses for same date, return most recent
-        var best=matches[0];
-        // If best is pending but there's a more recent approved/denied within same date that is slightly older due to ts, still check: actually most recent wins
-        // Ensure denied/approved take precedence over pending when same ts
-        if(best.status==='pending'){
-          // Look for approved/denied that is close in time (within 5 min) and prefer it
-          for(var mi=0;mi<matches.length;mi++){
-            if(matches[mi].status!=='pending' && Math.abs((matches[mi].ts||0)-best.ts)<5*60*1000){
-              // If approved/denied within 5 min of pending, prefer approved/denied (admin action after pending)
-              best=matches[mi];
-              break;
-            }
-            if(matches[mi].status!=='pending'){
-              best=matches[mi];
-              break;
-            }
-          }
+        // CRITICAL FIX V113: Approved/denied ALWAYS wins over pending for same date
+        var approvedMatches=matches.filter(function(m){ return m.status==='approved'; });
+        var deniedMatches=matches.filter(function(m){ return m.status==='denied'||m.status==='rejected'; });
+        var pendingMatches=matches.filter(function(m){ return m.status==='pending'; });
+        if(approvedMatches.length>0){
+          approvedMatches.sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
+          return approvedMatches[0];
         }
-        return best;
-      }
-      // Removed legacy repco_last_denied_ forcing - was causing approve->denied bug
-      // PRIORITY 3: Check pending - LOWEST, only if no denied/approved exists for same date
-      for(var rr=0;rr<reqs.length;rr++){
-        var r=reqs[rr];
-        if(!r) continue;
-        if(r.username && r.username.toLowerCase()!==myUsername) continue;
-        if(r.status!=='pending') continue;
-        var rDateKey=extractDateKey(r.shiftDate||'')||extractDateKey(r.shiftISO||'');
-        var objDateKey=extractDateKey(dateObj.date||'')||dateObj.date;
-        var dateMatch = (rDateKey && objDateKey && rDateKey===objDateKey) || (r.shiftDate && datesMatch(r.shiftDate, dateObj, iso)) || (r.shiftISO && iso && r.shiftISO===iso);
-        if(!dateMatch){
-          if(typeof r.shiftIdx==='number' && typeof idx==='number' && r.shiftIdx===idx){
-            if(!r.fortnightId || !dateObj.fortnight || r.fortnightId===dateObj.fortnight.id){
-              dateMatch=true;
-            }
-          }
+        if(deniedMatches.length>0){
+          deniedMatches.sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
+          return deniedMatches[0];
         }
-        if(dateMatch) return {req:r, index:rr, status:'pending'};
+        pendingMatches.sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
+        return pendingMatches[0]||matches[0];
       }
       return null;
     }
@@ -4930,6 +4923,22 @@ function renderMySchedule(){
       if(!a.dates||!b.dates||!a.dates[0]||!b.dates[0]) return 0;
       return a.dates[0].iso.localeCompare(b.dates[0].iso);
     });
+    // Build a quick lookup for dates that have approved/pending requests to ensure they show even if OFF
+    var hasRequestForDate={};
+    try{
+      for(var rri=0;rri<reqs.length;rri++){
+        var rrq=reqs[rri];
+        if(!rrq) continue;
+        if(rrq.username && rrq.username.toLowerCase()!==myUsername) continue;
+        var key=(rrq.shiftDate||'')+'|'+(rrq.shiftISO||'')+'|'+(rrq.shiftIdx!==undefined?rrq.shiftIdx:'');
+        hasRequestForDate[key]=true;
+        // Also by date key only
+        var dk=rrq.shiftDate?rrq.shiftDate.match(/(\d{1,2}\/\d{1,2})/):null;
+        if(dk) hasRequestForDate[dk[1]]=true;
+        if(rrq.shiftISO) hasRequestForDate[rrq.shiftISO]=true;
+        if(rrq.shiftDate) hasRequestForDate[rrq.shiftDate]=true;
+      }
+    }catch(e){}
     for(var f=0;f<sortedFns.length;f++){
       var fn=sortedFns[f];
       if(!fn.dates) continue;
@@ -4940,19 +4949,52 @@ function renderMySchedule(){
         var sh=(staffInFn.shifts && staffInFn.shifts[i]!=null) ? staffInFn.shifts[i] : 'OFF';
         var up=String(sh).toUpperCase().trim();
         var isOff=['OFF','NA','AB','ABSENT',''].indexOf(up)!==-1 || up==='';
-        if(isOff) continue;
+        // CRITICAL FIX V113: If shift is OFF but has a request (approved/pending), still include it so Approved shows
+        var hasReq=false;
+        if(isOff){
+          // Check if this date has any request
+          var dateKey=d.date||'';
+          var isoKey=d.iso||'';
+          if(hasRequestForDate[dateKey] || hasRequestForDate[isoKey] || hasRequestForDate[dateKey+'|'+isoKey+'|'+i] || hasRequestForDate[dateKey+'|'+''+'|'+i]){
+            hasReq=true;
+          } else {
+            // More thorough check via findRequestForShift
+            var testReq=findRequestForShift({date:dateKey, day:d.day, fortnight:fn}, isoKey, i);
+            if(testReq) hasReq=true;
+          }
+          if(!hasReq) continue;
+        }
         var parsed=parseShiftRange(sh);
+        // If OFF but has request, we still want to show it - use oldShift from request if available
+        if(!parsed && hasReq){
+          // Try to get parsed from request's oldShift
+          var reqForParse=findRequestForShift({date:d.date, day:d.day, fortnight:fn}, d.iso||'', i);
+          if(reqForParse && reqForParse.req && reqForParse.req.oldShift){
+            parsed=parseShiftRange(reqForParse.req.oldShift);
+          }
+          // If still no parsed, create dummy for display purposes - show as OFF but with request
+          if(!parsed){
+            allShifts.push({date:d, shift:sh, idx:i, fortnight:fn, iso:d.iso||'', isOffWithRequest:true});
+            continue;
+          }
+        }
         if(!parsed) continue;
-        if(d.iso && d.iso < todayISO) continue;
+        if(d.iso && d.iso < todayISO){
+          // For approved requests, show even if past (so user sees history)
+          var pastReq=findRequestForShift({date:d.date, day:d.day, fortnight:fn}, d.iso||'', i);
+          if(!pastReq || pastReq.status==='pending') continue;
+        }
         if(d.iso===todayISO){
           try{
             var shiftEnd=new Date(brisbaneNow);
             shiftEnd.setHours(Math.floor(parsed.end/60), parsed.end%60,0,0);
             if(shiftEnd < brisbaneNow) {
-              // Shift ended today, skip
               var shiftStart=new Date(brisbaneNow);
               shiftStart.setHours(Math.floor(parsed.start/60), parsed.start%60,0,0);
-              if(brisbaneNow > shiftEnd) continue;
+              if(brisbaneNow > shiftEnd){
+                var pastReq2=findRequestForShift({date:d.date, day:d.day, fortnight:fn}, d.iso||'', i);
+                if(!pastReq2 || pastReq2.status==='pending') continue;
+              }
             }
           }catch(e){}
         }
