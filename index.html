@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022700005_FIX_EDIT_GREEN_DELETE_V130";
+const BUILD_ID="20261022700007_FIX_CELL_DROPDOWN_V131b";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -1416,39 +1416,48 @@ function initApp(){populateFortnightSelect();renderRosterSafe(); applyRoleVisibi
 
 
 function populateFortnightSelect(){
-  var sel=document.getElementById('fortnight-select');
-  if(!sel) return;
+  var sels=document.querySelectorAll('#fortnight-select');
+  if(!sels || sels.length===0){
+    var selSingle=document.getElementById('fortnight-select');
+    sels=selSingle?[selSingle]:[];
+  }
+  if(sels.length===0) return;
   var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
-  if(fns.length===0){ sel.innerHTML='<option>14 Days - 07/10 - 20/10</option>'; return; }
-  sel.innerHTML='';
+  if(!fns || fns.length===0){
+    try{ seedIfEmpty(); }catch(e){}
+    fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+  }
+  if(!fns || fns.length===0){
+    fns=[{id:'fn_07_10',label:'14 Days - 07/10 - 20/10'},{id:'fn_21_10',label:'14 Days - 21/10 - 03/11'}];
+  }
   try{ if(typeof applyPersistentGreens==='function') applyPersistentGreens(); }catch(e){}
   var sorted=fns.slice().sort(function(a,b){
     if(!a.dates||!b.dates||!a.dates[0]||!b.dates[0]) return 0;
     return a.dates[0].iso.localeCompare(b.dates[0].iso);
   });
+  sels.forEach(function(sel){ sel.innerHTML=''; });
   sorted.forEach(function(fn){
-    var o=document.createElement('option');
-    o.value=fn.id;
-    o.textContent=fn.label;
-    sel.appendChild(o);
+    sels.forEach(function(sel){
+      var o=document.createElement('option');
+      o.value=fn.id;
+      o.textContent=fn.label;
+      sel.appendChild(o);
+    });
   });
   var storedId=safeGet('retail_roster_currentFortnightId');
   var lastManualTs=safeGet('repco_last_manual_select_ts');
   var now=Date.now();
   var cur=getCurrentFortnight();
   var curId;
-  // V122: Always default to roster containing today, mark it with indicator
   var todayISO=getISO();
   if(cur){
-    // If no recent manual select (<2min), always show current
     if(!lastManualTs || (now-parseInt(lastManualTs,10))>2*60*1000){
       curId=cur.id;
     } else {
-      // Recent manual - respect it unless it's not containing today and today roster exists
       var storedFn=sorted.find(function(f){ return f.id===storedId; });
       if(storedFn && storedFn.dates){
         if(todayISO < storedFn.dates[0].iso || todayISO > storedFn.dates[storedFn.dates.length-1].iso){
-          curId=cur.id; // stored doesn't contain today, force current
+          curId=cur.id;
         } else {
           curId=storedId;
         }
@@ -1459,20 +1468,22 @@ function populateFortnightSelect(){
   } else {
     curId=storedId||sorted[0].id;
   }
-  sel.value=curId;
+  sels.forEach(function(sel){ sel.value=curId; });
   safeSet('retail_roster_currentFortnightId',curId);
-  sel.onchange=function(){
-    safeSet('retail_roster_currentFortnightId',sel.value);
-    safeSet('repco_last_manual_fortnight_select', sel.value);
-    safeSet('repco_last_manual_select_ts', String(Date.now()));
-    if(typeof updateActivity==='function') updateActivity();
-    renderRosterSafe();
-    var fn=sorted.find(function(f){return f.id===sel.value;});
-    toast('Switched to '+ (fn?fn.label:sel.value));
-  };
+  sels.forEach(function(sel){
+    sel.onchange=function(){
+      var val=this.value;
+      sels.forEach(function(s){ s.value=val; });
+      safeSet('retail_roster_currentFortnightId',val);
+      safeSet('repco_last_manual_fortnight_select', val);
+      safeSet('repco_last_manual_select_ts', String(Date.now()));
+      if(typeof updateActivity==='function') updateActivity();
+      renderRosterSafe();
+      var fn=sorted.find(function(f){return f.id===val;});
+      toast('Switched to '+ (fn?fn.label:val));
+    };
+  });
 }
-
-
 
 
 
@@ -2370,37 +2381,42 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
       function cancelEdit(){
         if(isSaving) return;
         if(draftSaveTimeout) clearTimeout(draftSaveTimeout);
-        el.textContent=origText;
-        el.className=origClass;
-        clearEditDraft();
+        try{ _rosterEditActive=false; }catch(e){}
+        try{
+          el.textContent=origText;
+          el.className=origClass;
+        }catch(e){}
+        try{ clearEditDraft(); }catch(e){}
+        try{ renderRosterSafe(); }catch(e){}
       }
+      // Single clean handlers - Enter saves, Escape cancels
       input.addEventListener('keydown', function(e){
         if(e.key==='Enter'){
           e.preventDefault();
+          e.stopPropagation();
           saveEdit(input.value);
         } else if(e.key==='Escape'){
           e.preventDefault();
+          e.stopPropagation();
           cancelEdit();
         }
       });
       input.addEventListener('blur', function(){
+        // Delay to allow Enter key to fire first
         setTimeout(function(){
-          if(!isSaving && document.activeElement!==input){
+          if(!isSaving && document.activeElement!==input && _rosterEditActive){
             saveEdit(input.value);
           }
-        }, 200);
+        }, 250);
       });
-      input.addEventListener('keydown', function(e){
-        if(e.key==='Escape'){
-          try{ _rosterEditActive=false; }catch(e){}
-          try{ clearEditDraft(); }catch(e){}
-          try{ el.textContent=origText; el.className=origClass; }catch(e){}
-          try{ renderRosterSafe(); }catch(e){}
-        }
-        if(e.key==='Enter'){
-          e.preventDefault();
-          saveEdit(input.value);
-        }
+      // Auto-save draft while typing
+      input.addEventListener('input', function(){
+        try{
+          if(draftSaveTimeout) clearTimeout(draftSaveTimeout);
+          draftSaveTimeout=setTimeout(function(){
+            try{ saveEditDraft({rowIdx:rowIdx, colIdx:colIdx, value:input.value, ts:Date.now()}); }catch(e){}
+          }, 500);
+        }catch(e){}
       });
     }
   }catch(e){
