@@ -99,40 +99,44 @@ document.addEventListener('keydown', function(e){ if(e.key==='Escape'){ const m=
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
 <script>
-// FIX: Suppress Chrome extension "message channel closed" errors that flood console
-// This is caused by extensions (not our code) and is harmless
+// FIX: Suppress Chrome extension "message channel closed" errors that flood console - harmless extension error
 (function(){
   var originalError = console.error;
   console.error = function(){
-    var msg = arguments[0] ? arguments[0].toString() : '';
-    if(msg.includes('message channel closed') || msg.includes('A listener indicated an asynchronous response')){
-      return;
-    }
+    try{
+      var msg = arguments[0] ? arguments[0].toString() : '';
+      if(msg.includes('message channel closed') || msg.includes('A listener indicated an asynchronous response')){
+        return;
+      }
+    }catch(e){}
     return originalError.apply(console, arguments);
   };
   window.addEventListener('unhandledrejection', function(e){
-    if(e.reason && e.reason.message){
-      var msg = e.reason.message;
-      if(msg.includes('message channel closed') || msg.includes('A listener indicated an asynchronous response')){
+    try{
+      if(e.reason && e.reason.message){
+        var msg = e.reason.message;
+        if(msg.includes('message channel closed') || msg.includes('A listener indicated an asynchronous response')){
+          e.preventDefault();
+          e.stopPropagation();
+          return false;
+        }
+      }
+      if(e.reason && typeof e.reason === 'string' && e.reason.includes('message channel closed')){
         e.preventDefault();
-        e.stopPropagation();
         return false;
       }
-    }
-    if(e.reason && typeof e.reason === 'string' && e.reason.includes('message channel closed')){
-      e.preventDefault();
-      return false;
-    }
+    }catch(e2){}
   });
-  // Also suppress via window.onerror
-  var originalOnError = window.onerror;
   window.addEventListener('error', function(e){
-    if(e.message && (e.message.includes('message channel closed') || e.message.includes('A listener indicated an asynchronous response'))){
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      return true;
-    }
+    try{
+      if(e.message && (e.message.includes('message channel closed') || e.message.includes('A listener indicated an asynchronous response'))){
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return true;
+      }
+    }catch(e2){}
   }, true);
 })();
 </script>
@@ -347,11 +351,11 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022070000_FIX_ALL_V11_FINAL";
+const BUILD_ID="20261022080000_FIX_LOGIN_AND_PENDING_V12";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
-async async function checkForIndexUpdate(isInitial){
+async function checkForIndexUpdate(isInitial){
   try{
     const url=window.location.href.split("?")[0].split("#")[0];
     const res=await fetch(url+"?_v="+Date.now(),{cache:"no-store"});
@@ -719,6 +723,8 @@ function doLogin(){
   }
   toast('Welcome '+found.firstName);
 }
+window.doLogin = doLogin;
+
 
 
 function doLogout(){
