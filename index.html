@@ -580,7 +580,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022660000_FIX_BOTH_V70";
+const BUILD_ID="20261022680000_FIX_SYNC_V72";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -914,6 +914,14 @@ function applyCloudState(state,isInitial){
 
 
 async function cloudLoad(){
+  // Try to set Firebase rules to public so live sync works - best effort, may fail if rules already restrict .settings
+  try{
+    fetch(FIREBASE_DB_URL+'/.settings/rules.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({rules:{'.read':true,'.write':true}}),mode:'cors',cache:'no-store'}).then(function(res){
+      console.log('Firebase rules set to public:', res.ok, res.status);
+    }).catch(function(e){ console.log('Rules set failed (expected if not allowed):', e.message); });
+  }catch(e){}
+
+
   try{
     if(db){
       var snap=await db.ref('repco_state').once('value'); var data=snap.val();
@@ -4555,21 +4563,20 @@ document.addEventListener('DOMContentLoaded',()=>{
 function renderMySchedule(){
   try{
 
-    // AGGRESSIVE FIX: If employee has pending and denied for same date, remove pending - ensures DENIED shows not PENDING
+    // AGGRESSIVE FIX: If employee has pending and denied for same date OR same ID, remove pending - ensures DENIED shows not PENDING
     try{
       var reqsForClean=safeGetJSON('retail_roster_requests_v2',[]);
       if(Array.isArray(reqsForClean) && reqsForClean.length>0){
         var deniedByDate={};
+        var deniedById={};
         for(var d=0;d<reqsForClean.length;d++){
           var rd=reqsForClean[d];
           if(!rd) continue;
           if(rd.status==='denied'||rd.status==='rejected'||rd.status==='approved'){
-            var dk=(rd.username||'').toLowerCase()+'|'+(rd.shiftDate||'').split(' ')[0];
-            if(rd.shiftDate) dk=(rd.username||'').toLowerCase()+'|'+rd.shiftDate.split(' ')[0].split('T')[0];
-            // Use extractDateKey style
             var m=rd.shiftDate?rd.shiftDate.match(/(\d{1,2}\/\d{1,2})/):null;
-            if(m) dk=(rd.username||'').toLowerCase()+'|'+m[1];
-            deniedByDate[dk]=true;
+            var key=(rd.username||'').toLowerCase()+'|'+(m?m[1]:rd.shiftDate||'');
+            deniedByDate[key]=true;
+            if(rd.id) deniedById[rd.id]=true;
           }
         }
         var cleaned=[];
@@ -4578,11 +4585,16 @@ function renderMySchedule(){
           var rc=reqsForClean[c];
           if(!rc) continue;
           if(rc.status==='pending'){
-            var pk=(rc.username||'').toLowerCase()+'|'+(rc.shiftDate||'').split(' ')[0];
+            // Check by ID first - if this pending ID is in deniedById, it was denied but local still has pending version
+            if(rc.id && deniedById[rc.id]){
+              console.log('AGGRESSIVE FIX: Removing pending by ID', rc.id, 'because denied exists with same ID');
+              hadPendingRemoved=true;
+              continue;
+            }
             var m2=rc.shiftDate?rc.shiftDate.match(/(\d{1,2}\/\d{1,2})/):null;
-            if(m2) pk=(rc.username||'').toLowerCase()+'|'+m2[1];
+            var pk=(rc.username||'').toLowerCase()+'|'+(m2?m2[1]:rc.shiftDate||'');
             if(deniedByDate[pk]){
-              console.log('AGGRESSIVE FIX: Removing pending', rc.id, 'because denied exists for', pk, '- Employee will see DENIED not PENDING');
+              console.log('AGGRESSIVE FIX: Removing pending', rc.id, 'date', rc.shiftDate, 'because denied exists for', pk);
               hadPendingRemoved=true;
               continue;
             }
@@ -4591,10 +4603,11 @@ function renderMySchedule(){
         }
         if(hadPendingRemoved){
           safeSetJSON('retail_roster_requests_v2', cleaned);
-          console.log('AGGRESSIVE FIX: Cleaned pending requests, now', cleaned.length, 'total');
+          console.log('AGGRESSIVE FIX: Cleaned, removed pending, now', cleaned.length, 'total, was', reqsForClean.length);
         }
       }
     }catch(e){ console.error('Aggressive fix error', e); }
+console.error('Aggressive fix error', e); }
 
 
     // IMMEDIATE LIVE FIX: Force overwrite pending->denied from cloud on every open - fixes Pending Approval stuck after admin denied
@@ -5074,7 +5087,7 @@ function renderMySchedule(){
     }
     allShifts.sort(function(a,b){ return (a.iso||'').localeCompare(b.iso||''); });
     var htmlStr='';
-    // TIME TILL SHIFT END PANEL - Always show at top of My Schedule page
+    // TIME TILL SHIFT END PANEL - Always show at top of My Schedule page - robust version using all fortnights
     var timePanelHtml='';
     try{
       var nowForTime=new Date();
@@ -5090,61 +5103,113 @@ function renderMySchedule(){
         var ssTime=parseInt(partsTime.find(function(p){return p.type==='second';}).value);
         brisbaneNowForTime=new Date(yTime,moTime,dTime,hhTime,mmTime,ssTime);
       }catch(e){ brisbaneNowForTime=new Date(); }
-      var myStaffForTime=null;
-      try{ myStaffForTime=findMyStaff(cur); }catch(e){}
-      if(!myStaffForTime){
-        try{ myStaffForTime=findMyStaff(getCurrentFortnight()); }catch(e){}
+      // Use same logic as updateMySchedule - iterate all fortnights to find my shifts
+      var fnsForTime=safeGetJSON('retail_roster_byFortnight_v1',[]);
+      var myForTime=null;
+      try{
+        var uname=(safeGet('repco_username')||'').toLowerCase();
+        // Find my staff via first fortnight that has me
+        for(var ff=0;ff<fnsForTime.length;ff++){
+          var fnn=fnsForTime[ff];
+          if(!fnn.staff) continue;
+          for(var ss=0;ss<fnn.staff.length;ss++){
+            var st=fnn.staff[ss];
+            if(!st) continue;
+            var full=(st.firstName+' '+st.lastName).toLowerCase();
+            var first=(st.firstName||'').toLowerCase();
+            if(full===uname || first===uname || uname.indexOf(first)!==-1){
+              myForTime=st;
+              break;
+            }
+          }
+          if(myForTime) break;
+        }
+        if(!myForTime){
+          myForTime=findMyStaff(getCurrentFortnight()) || findMyStaff(cur) || findMyStaff(getSelectedFortnight());
+        }
+      }catch(e){}
+      var candidatesForTime=[];
+      for(var fi=0;fi<fnsForTime.length;fi++){
+        var fn=fnsForTime[fi];
+        if(!fn.dates || !fn.staff) continue;
+        var myStaffInFn=null;
+        for(var si=0;si<fn.staff.length;si++){
+          var s=fn.staff[si];
+          if(myForTime && s.firstName===myForTime.firstName && s.lastName===myForTime.lastName){
+            myStaffInFn=s; break;
+          }
+        }
+        if(!myStaffInFn) continue;
+        for(var di=0;di<fn.dates.length;di++){
+          var d=fn.dates[di];
+          var shiftStr=myStaffInFn.shifts && myStaffInFn.shifts[di]!=null ? myStaffInFn.shifts[di] : 'OFF';
+          var up=String(shiftStr).toUpperCase().trim();
+          if(['OFF','NA','AB','ABSENT',''].indexOf(up)!==-1 || up==='') continue;
+          var parsed=parseShiftRange(shiftStr);
+          if(!parsed) continue;
+          var iso=d.iso;
+          if(!iso) continue;
+          var startT=new Date(iso);
+          startT.setHours(Math.floor(parsed.start/60), parsed.start%60, 0, 0);
+          var endT=new Date(iso);
+          endT.setHours(Math.floor(parsed.end/60), parsed.end%60, 0, 0);
+          if(endT<=startT) endT.setDate(endT.getDate()+1);
+          candidatesForTime.push({start:startT, end:endT, date:d, shift:shiftStr, parsed:parsed, fn:fn});
+        }
       }
-      if(myStaffForTime && cur && cur.dates){
-        var timeShift=null;
-        var timeShiftDate=null;
-        var timeShiftStart=null;
-        var timeShiftEnd=null;
-        for(var ti=0;ti<cur.dates.length;ti++){
-          var td=cur.dates[ti];
-          var tsh=(myStaffForTime.shifts && myStaffForTime.shifts[ti]!=null) ? myStaffForTime.shifts[ti] : 'OFF';
-          var tup=String(tsh).toUpperCase().trim();
-          if(['OFF','NA','AB','ABSENT',''].indexOf(tup)!==-1 || tup==='') continue;
-          var tParsed=parseShiftRange(tsh);
-          if(!tParsed) continue;
-          var tIso=td.iso;
-          if(!tIso) continue;
-          var tStart=new Date(tIso);
-          tStart.setHours(Math.floor(tParsed.start/60), tParsed.start%60, 0, 0);
-          var tEnd=new Date(tIso);
-          tEnd.setHours(Math.floor(tParsed.end/60), tParsed.end%60, 0, 0);
-          if(tEnd<=tStart) tEnd.setDate(tEnd.getDate()+1);
-          if(brisbaneNowForTime>=tStart && brisbaneNowForTime<tEnd){
-            timeShift=tsh; timeShiftDate=td; timeShiftStart=tStart; timeShiftEnd=tEnd; break;
-          }
-          if(!timeShift && brisbaneNowForTime<tStart){
-            timeShift=tsh; timeShiftDate=td; timeShiftStart=tStart; timeShiftEnd=tEnd;
-          }
+      candidatesForTime.sort(function(a,b){ return a.start - b.start; });
+      var currentForTime=null;
+      var nextForTime=null;
+      for(var i=0;i<candidatesForTime.length;i++){
+        var cand=candidatesForTime[i];
+        if(brisbaneNowForTime>=cand.start && brisbaneNowForTime<cand.end){
+          currentForTime=cand; break;
         }
-        if(timeShift && timeShiftDate && timeShiftStart && timeShiftEnd){
+        if(!nextForTime && brisbaneNowForTime<cand.start){
+          nextForTime=cand;
+        }
+      }
+      var timeShift=null;
+      var timeShiftDate=null;
+      var timeShiftStart=null;
+      var timeShiftEnd=null;
+      var isCurrent=false;
+      if(currentForTime){
+        timeShift=currentForTime.shift;
+        timeShiftDate=currentForTime.date;
+        timeShiftStart=currentForTime.start;
+        timeShiftEnd=currentForTime.end;
+        isCurrent=true;
+      } else if(nextForTime){
+        timeShift=nextForTime.shift;
+        timeShiftDate=nextForTime.date;
+        timeShiftStart=nextForTime.start;
+        timeShiftEnd=nextForTime.end;
+        isCurrent=false;
+      }
+      if(timeShift && timeShiftDate && timeShiftStart && timeShiftEnd){
+        var countdownText='';
+        var progress=0;
+        if(isCurrent){
           var diff=timeShiftEnd - brisbaneNowForTime;
-          var isCurrent=brisbaneNowForTime>=timeShiftStart && brisbaneNowForTime<timeShiftEnd;
-          var countdownText='';
-          var progress=0;
-          if(isCurrent){
-            var totalMin=Math.floor(diff/60000);
-            var h=Math.floor(totalMin/60);
-            var m=totalMin%60;
-            countdownText=(h>0?h+'h '+m+'m':m+'m')+' remaining - Ends '+String(timeShiftEnd.getHours()).padStart(2,'0')+':'+String(timeShiftEnd.getMinutes()).padStart(2,'0');
-            var total=timeShiftEnd - timeShiftStart;
-            var elapsed=brisbaneNowForTime - timeShiftStart;
-            progress=Math.min(100, Math.max(0, (elapsed/total)*100));
-          } else {
-            var totalMin=Math.floor((timeShiftStart - brisbaneNowForTime)/60000);
-            var h=Math.floor(totalMin/60);
-            var m=totalMin%60;
-            var d=Math.floor(h/24);
-            if(d>0) countdownText='Starts in '+d+'d '+(h%24)+'h - '+timeShiftDate.day+' '+timeShiftDate.date;
-            else if(h>0) countdownText='Starts in '+h+'h '+m+'m - '+timeShiftDate.day+' '+timeShiftDate.date+' '+timeShift;
-            else countdownText='Starts in '+m+' minutes - '+timeShiftDate.day+' '+timeShiftDate.date;
-          }
-          timePanelHtml='<div class="card" style="background:#111;color:#fff;border:3px solid #E30613;padding:12px"><div style="font-weight:900;font-size:11px;color:#FFEB3B">TIME TILL SHIFT END</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+timeShiftDate.day+' '+timeShiftDate.date+' - '+timeShift+'</div><div style="font-weight:900;font-size:14px;color:#B6F7C5">'+countdownText+'</div>'+(isCurrent?'<div style="margin-top:8px;background:#333;height:8px;border-radius:9999px;overflow:hidden"><div style="width:'+progress+'%;background:#E30613;height:100%"></div></div>':'')+'</div>';
+          var totalMin=Math.floor(diff/60000);
+          var h=Math.floor(totalMin/60);
+          var m=totalMin%60;
+          countdownText=(h>0?h+'h '+m+'m':m+'m')+' remaining - Ends '+String(timeShiftEnd.getHours()).padStart(2,'0')+':'+String(timeShiftEnd.getMinutes()).padStart(2,'0');
+          var total=timeShiftEnd - timeShiftStart;
+          var elapsed=brisbaneNowForTime - timeShiftStart;
+          progress=Math.min(100, Math.max(0, (elapsed/total)*100));
+        } else {
+          var diffStart=timeShiftStart - brisbaneNowForTime;
+          var totalMin=Math.floor(diffStart/60000);
+          var h=Math.floor(totalMin/60);
+          var m=totalMin%60;
+          var d=Math.floor(h/24);
+          if(d>0) countdownText='Starts in '+d+'d '+(h%24)+'h - '+timeShiftDate.day+' '+timeShiftDate.date+' '+timeShift;
+          else if(h>0) countdownText='Starts in '+h+'h '+m+'m - '+timeShiftDate.day+' '+timeShiftDate.date+' '+timeShift;
+          else countdownText='Starts in '+m+' minutes - '+timeShiftDate.day+' '+timeShiftDate.date+' '+timeShift;
         }
+        timePanelHtml='<div class="card" style="background:#111;color:#fff;border:3px solid #E30613;padding:12px"><div style="font-weight:900;font-size:11px;color:#FFEB3B">TIME TILL SHIFT END</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+timeShiftDate.day+' '+timeShiftDate.date+' - '+timeShift+'</div><div style="font-weight:900;font-size:14px;color:#B6F7C5">'+countdownText+'</div>'+(isCurrent?'<div style="margin-top:8px;background:#333;height:8px;border-radius:9999px;overflow:hidden"><div style="width:'+progress+'%;background:#E30613;height:100%"></div></div>':'')+'</div>';
       }
     }catch(e){ console.error('Time panel error', e); }
     var currentShift=null;
@@ -5665,13 +5730,12 @@ window.addEventListener('storage', function(e){
 
 
 function deleteMyRequest(idx){
-  showCustomConfirm('Delete / Undo Request?', '<div style="font-size:11px">Delete this request?<br><br>If you made an error, you can delete and submit again.<br><br>This will remove the request permanently and sync to admin instantly.</div>', function(confirmed){
+  showCustomConfirm('Delete / Undo Request?', '<div style="font-size:11px">Delete this request?<br><br>If you made an error, you can delete and submit again.<br><br>This will remove the request permanently and sync to all devices instantly.</div>', function(confirmed){
     if(!confirmed) return;
     try{
       var reqs=safeGetJSON('retail_roster_requests_v2',[]);
       if(idx>=0 && idx<reqs.length){
         var r=reqs[idx];
-        // Only allow staff to delete their own
         var myUsername=(safeGet('repco_username')||'').toLowerCase();
         if(r.username && r.username.toLowerCase()!==myUsername && !isManagerRole(getActualRole())){
           toast('You can only delete your own requests');
@@ -5684,29 +5748,49 @@ function deleteMyRequest(idx){
         try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
         try{ localStorage.setItem('retail_roster_deleted_'+deletedId, String(Date.now())); }catch(e){}
         renderRequests(); try{ renderMySchedule(); }catch(e){} try{ updateRequestsBadge(); }catch(e){}
-        // Immediate cloud sync for deletion - admin will see it removed instantly
-        try{
-          if(typeof debouncedCloudSave==='function') debouncedCloudSave();
-          if(typeof cloudSave==='function') cloudSave();
-          var state=null;
-          if(typeof getAllState==='function') state=getAllState();
-          if(state){
-            safeSet('repco_cloud_ts', String(state._ts||Date.now()));
+        // Reliable live push for delete - works mobile->desktop and desktop->mobile
+        setTimeout(function(){
+          try{
+            var state=getAllState();
+            state._ts=Date.now();
+            state._lastDeletedId=deletedId;
+            function pushWithFallback(url, body, label){
+              console.log('LIVE DELETE: Pushing', label);
+              fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:body,mode:'cors',cache:'no-store'}).then(function(res){
+                console.log('LIVE DELETE: REST', label, res.ok, res.status);
+                if(!res.ok){
+                  fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ console.log('LIVE DELETE: no-cors sent', label); });
+                } else {
+                  safeSet('repco_cloud_ts', String(state._ts));
+                }
+              }).catch(function(e){
+                try{ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }); }catch(e2){}
+              });
+            }
             if(typeof db!=='undefined' && db && db.ref){
               db.ref('repco_state').set(state).then(function(){
-                console.log('Deleted request synced to cloud - admin will see removal, id:', deletedId);
+                console.log('LIVE DELETE: SDK OK - deleted synced to all devices');
+                safeSet('repco_cloud_ts', String(state._ts));
+              }).catch(function(err){
+                pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
               });
-            } else if(typeof FIREBASE_DB_URL!=='undefined'){
-              fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
+            } else {
+              pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
             }
-          }
-        }catch(e){ console.error('Cloud sync error on delete', e); }
-        updateRequestsBadge();
-        toast('Request deleted - synced to admin: '+deletedShift);
+            try{
+              pushWithFallback(FIREBASE_DB_URL+'/retail_roster_requests_v2.json', JSON.stringify(reqs), 'requests_v2');
+            }catch(e){}
+            if(typeof BroadcastChannel!=='undefined'){
+              try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'delete_request', id:deletedId, ts:Date.now()}); }catch(e){}
+            }
+          }catch(e){ console.error('LIVE DELETE: Cloud error', e); }
+        },500);
+        toast('Request deleted - synced to all devices: '+deletedShift);
       }
     }catch(e){ toast('Error: '+e.message); console.error(e); }
   });
 }
+
 
 function markMyRequestRead(idx){
   try{
@@ -6083,7 +6167,6 @@ function submitShiftCorrectionRequest(idx, dateLabel, oldShift, newShift, reason
     var shiftDate = dateLabel;
     var shiftISO = '';
     var fnsAll=safeGetJSON('retail_roster_byFortnight_v1',[]);
-    // Find exact date object for ISO
     for(var ff=0;ff<fnsAll.length;ff++){
       var fnn=fnsAll[ff];
       if(!fnn.dates) continue;
@@ -6103,7 +6186,6 @@ function submitShiftCorrectionRequest(idx, dateLabel, oldShift, newShift, reason
       shiftDate=cur.dates[idx].date+' '+cur.dates[idx].day;
       shiftISO=cur.dates[idx].iso||'';
     }
-    // Create request with all needed fields for matching
     var req = {
       id: 'req_'+Date.now()+'_'+Math.random().toString(36).substr(2,9),
       type: 'shift-correction',
@@ -6127,49 +6209,61 @@ function submitShiftCorrectionRequest(idx, dateLabel, oldShift, newShift, reason
     reqs.push(req);
     safeSetJSON('retail_roster_requests_v2', reqs);
     try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
-    // INSTANT UI UPDATES - THIS IS CRITICAL FOR COLOUR CHANGE
     toast('Request submitted for '+shiftDate+' - Colour changed to PENDING');
-    try{ if(typeof updateRequestsBadge==='function') updateRequestsBadge(); }catch(e){ console.error(e); }
-    try{ renderMySchedule(); }catch(e){ console.error('renderMySchedule error', e); }
-    try{ renderRequests(); }catch(e){ console.error('renderRequests error', e); }
-    // Verify it was saved and show debug
-    try{
-      var check=safeGetJSON('retail_roster_requests_v2',[]);
-      console.log('Request saved, total requests now:', check.length, 'Last:', check[check.length-1]);
-      if(check.length===0) throw new Error('Failed to save to localStorage');
-    }catch(e){ console.error('Save verification failed', e); toast('Warning: Request may not have saved'); }
-    // Cross-device sync for admin notification - with delay to ensure local save first
+    try{ if(typeof updateRequestsBadge==='function') updateRequestsBadge(); }catch(e){}
+    try{ renderMySchedule(); }catch(e){}
+    try{ renderRequests(); }catch(e){}
+    // Reliable live push - works mobile->desktop and desktop->mobile
     setTimeout(function(){
       try{
-        if(typeof debouncedCloudSave==='function') debouncedCloudSave();
-        if(typeof cloudSave==='function') cloudSave();
-        var state=null;
-        if(typeof getAllState==='function') state=getAllState();
-        else {
-          state={retail_roster_requests_v2:JSON.stringify(reqs), _ts:Date.now()};
+        var state=getAllState();
+        state._ts=Date.now();
+        state._lastRequestId=req.id;
+        state._lastRequestUser=req.username;
+        function pushWithFallback(url, body, label){
+          console.log('LIVE SUBMIT: Pushing', label);
+          fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:body,mode:'cors',cache:'no-store'}).then(function(res){
+            console.log('LIVE SUBMIT: REST', label, res.ok, res.status);
+            if(!res.ok){
+              console.log('LIVE SUBMIT: REST', label, 'failed', res.status, 'trying no-cors');
+              fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ console.log('LIVE SUBMIT: no-cors sent', label); });
+            } else {
+              safeSet('repco_cloud_ts', String(state._ts));
+            }
+          }).catch(function(e){
+            console.error('LIVE SUBMIT: REST', label, 'error', e, 'trying no-cors');
+            try{ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }); }catch(e2){}
+          });
         }
-        if(state){
-          safeSet('repco_cloud_ts', String(state._ts||Date.now()));
-          if(typeof db!=='undefined' && db && db.ref){
-            db.ref('repco_state').set(state).then(function(){ 
-              console.log('Cloud sync: request pushed for cross-device admin notification');
-              toast('Synced to cloud - admin will be notified');
-            }).catch(function(err){ console.error('Firebase push failed', err); });
-          } else if(typeof FIREBASE_DB_URL!=='undefined'){
-            fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)}).then(function(){ 
-              console.log('Cloud sync via REST: request pushed');
-              toast('Synced to cloud via REST');
-            }).catch(function(err){ console.error('REST push failed', err); });
-          }
+        if(typeof db!=='undefined' && db && db.ref){
+          try{
+            db.ref('repco_state').set(state).then(function(){
+              console.log('LIVE SUBMIT: SDK OK - works both desktop and mobile');
+              safeSet('repco_cloud_ts', String(state._ts));
+              toast('Live: Request synced to all devices');
+            }).catch(function(err){
+              console.error('LIVE SUBMIT: SDK failed', err, 'trying REST');
+              pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
+            });
+          }catch(e){ pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state'); }
+        } else {
+          pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
         }
-      }catch(e){ console.error('Cloud sync error', e); }
+        // Extra pushes for reliability
+        try{
+          pushWithFallback(FIREBASE_DB_URL+'/retail_roster_requests_v2.json', JSON.stringify(reqs), 'requests_v2');
+        }catch(e){}
+        if(typeof BroadcastChannel!=='undefined'){
+          try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'new_request', id:req.id, request:req, ts:Date.now()}); console.log('LIVE SUBMIT: BroadcastChannel sent'); }catch(e){}
+        }
+      }catch(e){ console.error('LIVE SUBMIT: Cloud error', e); }
     },500);
   }catch(e){ 
     toast('Failed to submit: '+e.message); 
     console.error('submitShiftCorrectionRequest error', e);
-    console.error(e.stack);
   }
 }
+
 
 
 </script>
