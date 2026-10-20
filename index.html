@@ -580,7 +580,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_DENY_BOTH_V78";
+const BUILD_ID="20261022690000_FIX_DENY_LIVE_V80";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -1132,6 +1132,36 @@ async function cloudLoad(){
       }
     }catch(e){ console.log('jsonstore denied poll error', e.message); }
   },2000);
+
+
+  // JSONSTORE fallback polling for USERS - username/password live sync
+  setInterval(async function(){
+    try{
+      var rj=await fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-users?_t='+Date.now(),{cache:'no-store', mode:'cors'});
+      if(!rj.ok) return;
+      var jd=await rj.json();
+      if(!jd || !jd.users || !Array.isArray(jd.users)) return;
+      var localUsers=safeGetJSON('retail_roster_users_v1',[]);
+      var cloudUsers=jd.users;
+      // If counts differ or any username/password differs, update
+      var hasChange=false;
+      if(localUsers.length!==cloudUsers.length) hasChange=true;
+      else {
+        for(var i=0;i<cloudUsers.length;i++){
+          var cu=cloudUsers[i];
+          var lu=localUsers.find(function(u){ return u.username.toLowerCase()===cu.username.toLowerCase(); });
+          if(!lu) { hasChange=true; break; }
+          if(lu.password!==cu.password || lu.role!==cu.role || lu.username!==cu.username) { hasChange=true; break; }
+        }
+      }
+      if(hasChange){
+        console.log('LIVE SYNC: Found user changes via jsonstore', cloudUsers.length, 'users - Username/password live sync');
+        safeSetJSON('retail_roster_users_v1', cloudUsers);
+        try{ renderAccountMgmtPage(); }catch(e){}
+        toast('Live: Users updated (username/password changed)');
+      }
+    }catch(e){ console.log('jsonstore users poll error', e.message); }
+  },3000);
 
 }
 
@@ -2706,7 +2736,6 @@ function adminAddUserMgmt(){
   if(!un||!pw){ toast('Enter username & password'); return; }
   let users=safeGetJSON('retail_roster_users_v1',[]);
   if(users.find(x=>x.username.toLowerCase()===un.toLowerCase())){ toast('Username exists'); return; }
-  // Parse first/last name - use inputs if provided, otherwise try to map from username
   var firstName=firstInput||'';
   var lastName=lastInput||'';
   if(!firstName){
@@ -2724,12 +2753,98 @@ function adminAddUserMgmt(){
   document.getElementById('new-user-pass').value='';
   var firstEl=document.getElementById('new-user-first'); if(firstEl) firstEl.value='';
   var lastEl=document.getElementById('new-user-last'); if(lastEl) lastEl.value='';
-  toast('Added '+un+' ('+firstName+' '+lastName+') - linked to roster - synced');
+  toast('Added '+un+' ('+firstName+' '+lastName+') - syncing live to all devices');
   renderAccountMgmtPage();
-  try{ debouncedCloudSave(); cloudSave(); }catch(e){}
+  setTimeout(function(){
+    try{
+      var state=getAllState();
+      state._ts=Date.now();
+      state._lastUserAdd=un;
+      function pushWithFallback(url, body, label){
+        fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:body,mode:'cors',cache:'no-store'}).then(function(res){
+          if(!res.ok){ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }); }
+          else { safeSet('repco_cloud_ts', String(state._ts)); }
+        }).catch(function(){ try{ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }); }catch(e){} });
+      }
+      if(typeof db!=='undefined' && db && db.ref){
+        db.ref('repco_state').set(state).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); toast('Live: User added on all devices'); }).catch(function(){ pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state'); });
+      } else {
+        pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
+      }
+      try{ pushWithFallback(FIREBASE_DB_URL+'/retail_roster_users_v1.json', JSON.stringify(users), 'users_v1'); }catch(e){}
+      try{ fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({users:users, ts:Date.now()}),mode:'cors'}).then(function(res){ console.log('LIVE USER ADD: jsonstore', res.ok); }); }catch(e){}
+    }catch(e){ console.error('LIVE USER ADD error', e); }
+  },500);
 }
-function adminEditUser(idx){ let users=safeGetJSON('retail_roster_users_v1',[]); const u=users[idx]; if(!u) return; showCustomPrompt('Edit User', '<div style="display:flex;flex-direction:column;gap:8px"><input id="edit-u-name" value="'+u.username+'" style="padding:10px;border-radius:9999px;border:2px solid #111"><input id="edit-u-pass" placeholder="New password (blank to keep)" type="password" style="padding:10px;border-radius:9999px;border:2px solid #111"><select id="edit-u-role" style="padding:10px;border-radius:9999px;border:2px solid #111"><option value="staff" '+(u.role==='staff'?'selected':'')+'>staff</option><option value="manager" '+(u.role==='manager'?'selected':'')+'>manager</option><option value="admin" '+(u.role==='admin'?'selected':'')+'>admin</option><option value="master" '+(u.role==='master'?'selected':'')+'>master</option></select></div>', (ok)=>{ if(!ok) return; const nu=document.getElementById('edit-u-name').value.trim(); const np=document.getElementById('edit-u-pass').value.trim(); const nr=document.getElementById('edit-u-role').value; if(nu) u.username=nu; if(np) u.password=np; if(nr) u.role=nr; safeSetJSON('retail_roster_users_v1',users); try{ let curU=(safeGet('repco_username')||'').toLowerCase(); if(u && u.username.toLowerCase()===curU){ document.body.classList.remove('is-admin','staff-view'); if((role||'').toLowerCase()==='manager'||(role||'').toLowerCase()==='admin'){document.body.classList.add('is-admin');}else{document.body.classList.add('staff-view');}; safeSet('repco_currentRole', (nr||u.role||'').toLowerCase()); } }catch(e){} toast('Updated - synced - logout/login to apply role'); renderAccountMgmtPage(); applyRoleVisibility(); }); }
-function adminDelUser(idx){ let users=safeGetJSON('retail_roster_users_v1',[]); if(!users[idx]) return; showCustomConfirm('Delete user?', users[idx].username, (ok)=>{ if(!ok) return; if(users.length<=1){ toast('Cannot delete last user'); return; } users.splice(idx,1); safeSetJSON('retail_roster_users_v1',users); toast('Deleted - synced'); renderAccountMgmtPage(); }); }
+
+function adminEditUser(idx){ let users=safeGetJSON('retail_roster_users_v1',[]); const u=users[idx]; if(!u) return; showCustomPrompt('Edit User', '<div style="display:flex;flex-direction:column;gap:8px"><input id="edit-u-name" value="'+u.username+'" style="padding:10px;border-radius:9999px;border:2px solid #111"><input id="edit-u-pass" placeholder="New password (blank to keep)" type="password" style="padding:10px;border-radius:9999px;border:2px solid #111"><select id="edit-u-role" style="padding:10px;border-radius:9999px;border:2px solid #111"><option value="staff" '+(u.role==='staff'?'selected':'')+'>staff</option><option value="manager" '+(u.role==='manager'?'selected':'')+'>manager</option><option value="admin" '+(u.role==='admin'?'selected':'')+'>admin</option><option value="master" '+(u.role==='master'?'selected':'')+'>master</option></select></div>', (ok)=>{ if(!ok) return; const nu=document.getElementById('edit-u-name').value.trim(); const np=document.getElementById('edit-u-pass').value.trim(); const nr=document.getElementById('edit-u-role').value; if(nu) u.username=nu; if(np) u.password=np; if(nr) u.role=nr; safeSetJSON('retail_roster_users_v1',users); try{ let curU=(safeGet('repco_username')||'').toLowerCase(); if(u && u.username.toLowerCase()===curU){ document.body.classList.remove('is-admin','staff-view'); if((role||'').toLowerCase()==='manager'||(role||'').toLowerCase()==='admin'){document.body.classList.add('is-admin');}else{document.body.classList.add('staff-view');}; safeSet('repco_currentRole', (nr||u.role||'').toLowerCase()); } }catch(e){} toast('Updated - syncing live to all devices'); renderAccountMgmtPage(); applyRoleVisibility(); 
+  // LIVE SYNC for username/password change - same reliable pattern as requests
+  setTimeout(function(){
+    try{
+      var state=getAllState();
+      state._ts=Date.now();
+      state._lastUserEditId=u.username;
+      state._lastUserEditTs=Date.now();
+      function pushWithFallback(url, body, label){
+        console.log('LIVE USER EDIT: Pushing', label);
+        fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:body,mode:'cors',cache:'no-store'}).then(function(res){
+          console.log('LIVE USER EDIT: REST', label, res.ok, res.status);
+          if(!res.ok){
+            fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ console.log('LIVE USER EDIT: no-cors sent', label); safeSet('repco_cloud_ts', String(state._ts)); });
+          } else {
+            safeSet('repco_cloud_ts', String(state._ts));
+          }
+        }).catch(function(e){
+          try{ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }); }catch(e2){}
+        });
+      }
+      if(typeof db!=='undefined' && db && db.ref){
+        db.ref('repco_state').set(state).then(function(){
+          console.log('LIVE USER EDIT: SDK OK - username/password synced live');
+          safeSet('repco_cloud_ts', String(state._ts));
+          toast('Live: User updated on all devices');
+        }).catch(function(err){
+          pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
+        });
+      } else {
+        pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
+      }
+      try{
+        pushWithFallback(FIREBASE_DB_URL+'/retail_roster_users_v1.json', JSON.stringify(users), 'users_v1');
+      }catch(e){}
+      try{
+        fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({users:users, ts:Date.now()}),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE USER EDIT: jsonstore users', res.ok); }).catch(function(){});
+      }catch(e){}
+      if(typeof BroadcastChannel!=='undefined'){
+        try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'user_edit', users:users, ts:Date.now()}); }catch(e){}
+      }
+    }catch(e){ console.error('LIVE USER EDIT error', e); }
+  },500);
+}); }
+
+function adminDelUser(idx){ let users=safeGetJSON('retail_roster_users_v1',[]); if(!users[idx]) return; showCustomConfirm('Delete user?', users[idx].username, (ok)=>{ if(!ok) return; if(users.length<=1){ toast('Cannot delete last user'); return; } var deletedName=users[idx].username; users.splice(idx,1); safeSetJSON('retail_roster_users_v1',users); toast('Deleted - syncing live'); renderAccountMgmtPage(); 
+  setTimeout(function(){
+    try{
+      var state=getAllState();
+      state._ts=Date.now();
+      state._lastUserDelete=deletedName;
+      function pushWithFallback(url, body, label){
+        fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:body,mode:'cors',cache:'no-store'}).then(function(res){
+          if(!res.ok){ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }); }
+          else { safeSet('repco_cloud_ts', String(state._ts)); }
+        }).catch(function(){ try{ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }); }catch(e){} });
+      }
+      if(typeof db!=='undefined' && db && db.ref){
+        db.ref('repco_state').set(state).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); toast('Live: User deleted on all devices'); }).catch(function(){ pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state'); });
+      } else {
+        pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
+      }
+      try{ pushWithFallback(FIREBASE_DB_URL+'/retail_roster_users_v1.json', JSON.stringify(users), 'users_v1'); }catch(e){}
+      try{ fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({users:users, ts:Date.now()}),mode:'cors'}).then(function(res){ console.log('LIVE USER DELETE: jsonstore', res.ok); }); }catch(e){}
+    }catch(e){ console.error('LIVE USER DELETE error', e); }
+  },500);
+}); }
+
 function saveLogoutTimer(){ const v=document.getElementById('logout-timer')?.value||'30'; safeSet('repco_logout_minutes',v); toast('Logout timer: '+(v==='0'?'Never':v+' min')); startLogoutTimer(); }
 let logoutInterval=null; function startLogoutTimer(){ if(logoutInterval) clearInterval(logoutInterval); const minStr=safeGet('repco_logout_minutes')||'30'; const mins=parseInt(minStr); if(mins===0) return; logoutInterval=setInterval(()=>{ doLogout(); toast('Auto logged out after '+mins+' min'); clearInterval(logoutInterval); }, mins*60*1000); }
 
@@ -2882,13 +2997,13 @@ function denyReq(i){
             console.log('LIVE DENY: REST', label, res.ok, res.status);
             if(!res.ok){
               console.log('LIVE DENY: REST', label, 'failed', res.status, 'trying no-cors');
-              fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ console.log('LIVE DENY: no-cors sent', label); });
+              fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ console.log('LIVE DENY: no-cors sent', label); safeSet('repco_cloud_ts', String(state._ts)); });
             } else {
               safeSet('repco_cloud_ts', String(state._ts));
             }
           }).catch(function(e){
             console.error('LIVE DENY: REST', label, 'error', e, 'trying no-cors');
-            try{ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }); }catch(e2){}
+            try{ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ console.log('LIVE DENY: no-cors sent via catch', label); safeSet('repco_cloud_ts', String(state._ts)); }); }catch(e2){}
           });
         }
         if(typeof db!=='undefined' && db && db.ref){
@@ -5480,8 +5595,28 @@ function renderAccountPage(){
 }
 
 function changePassword(){
-  const newU=(document.getElementById('new-username')?.value||'').trim(); const newP=(document.getElementById('new-pass')?.value||'').trim(); if(!newU){ toast('Username required'); return; } const oldUsername=safeGet('repco_username'); let users=safeGetJSON('retail_roster_users_v1',[]); let idx=users.findIndex(u=>u.username && u.username.toLowerCase()===oldUsername.toLowerCase()); if(idx===-1){ toast('User not found'); return; } if(newU.toLowerCase()!==oldUsername.toLowerCase() && users.some(u=>u.username && u.username.toLowerCase()===newU.toLowerCase())){ toast('Username taken'); return; } users[idx].username=newU; if(newP) users[idx].password=newP; safeSetJSON('retail_roster_users_v1',users); safeSet('repco_username',newU); safeSetJSON('retail_roster_session_v1',{...users[idx]}); toast('Saved: '+newU); renderAccountPage();
+  const newU=(document.getElementById('new-username')?.value||'').trim(); const newP=(document.getElementById('new-pass')?.value||'').trim(); if(!newU){ toast('Username required'); return; } const oldUsername=safeGet('repco_username'); let users=safeGetJSON('retail_roster_users_v1',[]); let idx=users.findIndex(u=>u.username && u.username.toLowerCase()===oldUsername.toLowerCase()); if(idx===-1){ toast('User not found'); return; } if(newU.toLowerCase()!==oldUsername.toLowerCase() && users.some(u=>u.username && u.username.toLowerCase()===newU.toLowerCase())){ toast('Username taken'); return; } users[idx].username=newU; if(newP) users[idx].password=newP; safeSetJSON('retail_roster_users_v1',users); safeSet('repco_username',newU); safeSetJSON('retail_roster_session_v1',{...users[idx]}); toast('Saved: '+newU+' - syncing live'); renderAccountPage();
+  setTimeout(function(){
+    try{
+      var state=getAllState();
+      state._ts=Date.now();
+      function pushWithFallback(url, body, label){
+        fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:body,mode:'cors',cache:'no-store'}).then(function(res){
+          if(!res.ok){ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }); }
+          else { safeSet('repco_cloud_ts', String(state._ts)); }
+        }).catch(function(){ try{ fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }); }catch(e){} });
+      }
+      if(typeof db!=='undefined' && db && db.ref){
+        db.ref('repco_state').set(state).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }).catch(function(){ pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state'); });
+      } else {
+        pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
+      }
+      try{ pushWithFallback(FIREBASE_DB_URL+'/retail_roster_users_v1.json', JSON.stringify(users), 'users_v1'); }catch(e){}
+      try{ fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({users:users, ts:Date.now()}),mode:'cors'}); }catch(e){}
+    }catch(e){}
+  },500);
 }
+
 
 
 
