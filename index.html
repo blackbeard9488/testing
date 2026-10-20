@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_REVERT_V115";
+const BUILD_ID="20261022690000_FIX_NODELETE_REVERT_V116";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -4968,6 +4968,7 @@ function renderMySchedule(){
         var r=reqs[rr];
         if(!r) continue;
         if(r.status==='superseded') continue; // V115: Ignore superseded (admin manually edited after approval)
+        if(r.hiddenByUser) continue; // V116: Hidden by user - don't show badge but roster stays actioned
         if(r.username && r.username.toLowerCase()!==myUsername) continue;
         var rDateKey=extractDateKey(r.shiftDate||'')||extractDateKey(r.shiftISO||'');
         var objDateKey=extractDateKey(dateObj.date||'')||dateObj.date;
@@ -5797,12 +5798,30 @@ function deleteMyRequest(idx){
           toast('You can only delete your own requests');
           return;
         }
+        // V116 FIX: Prevent deleting approved/denied from reverting shift on My Schedule
+        // If request is already approved/denied, deleting should NOT revert roster - roster stays actioned
+        // So we block deletion of final requests, or at least ensure roster is NOT restored
+        if(r.status==='approved' || r.status==='denied' || r.status==='rejected' || r.status==='superseded'){
+          showCustomConfirm('Cannot Delete Final Request', '<div style="font-size:11px">This request is already <b>'+r.status.toUpperCase()+'</b> and has been actioned on the roster.<br><br>Deleting it will NOT revert your shift - roster stays as '+ (r.newShift||'OFF') + '.<br><br>If you want to change it again, submit a NEW request for same date.<br><br>Do you want to hide it from your list instead of deleting?</div>', function(hide){
+            if(!hide) return;
+            // Mark as hidden/read instead of deleting, so roster stays
+            r.hiddenByUser=true;
+            r.hiddenTs=Date.now();
+            safeSetJSON('retail_roster_requests_v2', reqs);
+            renderRequests(); try{ renderMySchedule(); }catch(e){} try{ updateRequestsBadge(); }catch(e){}
+            try{ debouncedCloudSave(); }catch(e){}
+            toast('Request hidden - roster stays as '+(r.newShift||'actioned'));
+          });
+          return;
+        }
         var deletedId=r.id;
         var deletedShift=r.shiftDate||r.date||'';
         reqs.splice(idx,1);
         safeSetJSON('retail_roster_requests_v2', reqs);
         try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
         try{ localStorage.setItem('retail_roster_deleted_'+deletedId, String(Date.now())); }catch(e){}
+        // V116: Ensure deleting PENDING does NOT revert roster (pending never actioned roster anyway)
+        // For safety, do NOT touch roster shifts or originalShifts here
         renderRequests(); try{ renderMySchedule(); }catch(e){} try{ updateRequestsBadge(); }catch(e){}
         setTimeout(function(){
           try{
