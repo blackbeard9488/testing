@@ -580,7 +580,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_MOBILE_PENDING_V76";
+const BUILD_ID="20261022690000_FIX_MOBILE_DESKTOP_V77";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -1070,6 +1070,46 @@ async function cloudLoad(){
       }
     }catch(e){}
   },1000);
+
+  // JSONSTORE fallback polling for mobile->desktop requests - enables cross-device sync when Firebase blocks
+  setInterval(async function(){
+    try{
+      var rj=await fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-requests?_t='+Date.now(),{cache:'no-store', mode:'cors'});
+      if(!rj.ok) return;
+      var jd=await rj.json();
+      if(!jd || !jd.request || !jd.request.id) return;
+      var cr=jd.request;
+      var localReqs=safeGetJSON('retail_roster_requests_v2',[]);
+      var found=localReqs.find(function(lr){ return lr.id===cr.id; });
+      if(!found){
+        console.log('LIVE SYNC: Found new request via jsonstore', cr.id, 'from', cr.username, '- Mobile->Desktop fix');
+        localReqs.push(cr);
+        safeSetJSON('retail_roster_requests_v2', localReqs);
+        try{ renderMySchedule(); }catch(e){}
+        try{ renderRequests(); }catch(e){}
+        try{ updateRequestsBadge(); }catch(e){}
+        toast('Live: New request from '+cr.username+' (jsonstore)');
+      }
+    }catch(e){ console.log('jsonstore requests poll error', e.message); }
+  },3000);
+  setInterval(async function(){
+    try{
+      var rj=await fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-deleted?_t='+Date.now(),{cache:'no-store', mode:'cors'});
+      if(!rj.ok) return;
+      var jd=await rj.json();
+      if(!jd || !jd.id) return;
+      var localReqs=safeGetJSON('retail_roster_requests_v2',[]);
+      var idx=localReqs.findIndex(function(lr){ return lr.id===jd.id; });
+      if(idx!==-1){
+        console.log('LIVE SYNC: Found deleted via jsonstore', jd.id, '- Mobile->Desktop fix');
+        localReqs.splice(idx,1);
+        safeSetJSON('retail_roster_requests_v2', localReqs);
+        try{ renderMySchedule(); }catch(e){}
+        try{ renderRequests(); }catch(e){}
+      }
+    }catch(e){}
+  },3000);
+
 }
 
 async function cloudSave(){
@@ -5559,7 +5599,6 @@ function deleteMyRequest(idx){
         try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
         try{ localStorage.setItem('retail_roster_deleted_'+deletedId, String(Date.now())); }catch(e){}
         renderRequests(); try{ renderMySchedule(); }catch(e){} try{ updateRequestsBadge(); }catch(e){}
-        // Reliable live push for delete - works mobile->desktop and desktop->mobile
         setTimeout(function(){
           try{
             var state=getAllState();
@@ -5570,7 +5609,7 @@ function deleteMyRequest(idx){
               fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:body,mode:'cors',cache:'no-store'}).then(function(res){
                 console.log('LIVE DELETE: REST', label, res.ok, res.status);
                 if(!res.ok){
-                  fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ console.log('LIVE DELETE: no-cors sent', label); });
+                  fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ console.log('LIVE DELETE: no-cors sent', label); safeSet('repco_cloud_ts', String(state._ts)); });
                 } else {
                   safeSet('repco_cloud_ts', String(state._ts));
                 }
@@ -5591,6 +5630,9 @@ function deleteMyRequest(idx){
             try{
               pushWithFallback(FIREBASE_DB_URL+'/retail_roster_requests_v2.json', JSON.stringify(reqs), 'requests_v2');
             }catch(e){}
+            try{
+              fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-deleted',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:deletedId, ts:Date.now()}),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE DELETE: jsonstore deleted', res.ok); }).catch(function(){});
+            }catch(e){}
             if(typeof BroadcastChannel!=='undefined'){
               try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'delete_request', id:deletedId, ts:Date.now()}); }catch(e){}
             }
@@ -5601,6 +5643,7 @@ function deleteMyRequest(idx){
     }catch(e){ toast('Error: '+e.message); console.error(e); }
   });
 }
+
 
 
 function markMyRequestRead(idx){
@@ -6024,7 +6067,6 @@ function submitShiftCorrectionRequest(idx, dateLabel, oldShift, newShift, reason
     try{ if(typeof updateRequestsBadge==='function') updateRequestsBadge(); }catch(e){}
     try{ renderMySchedule(); }catch(e){}
     try{ renderRequests(); }catch(e){}
-    // Reliable live push - works mobile->desktop and desktop->mobile
     setTimeout(function(){
       try{
         var state=getAllState();
@@ -6037,7 +6079,10 @@ function submitShiftCorrectionRequest(idx, dateLabel, oldShift, newShift, reason
             console.log('LIVE SUBMIT: REST', label, res.ok, res.status);
             if(!res.ok){
               console.log('LIVE SUBMIT: REST', label, 'failed', res.status, 'trying no-cors');
-              fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ console.log('LIVE SUBMIT: no-cors sent', label); });
+              fetch(url,{method:'PUT',body:body,mode:'no-cors',cache:'no-store'}).then(function(){ 
+                console.log('LIVE SUBMIT: no-cors sent', label); 
+                safeSet('repco_cloud_ts', String(state._ts));
+              });
             } else {
               safeSet('repco_cloud_ts', String(state._ts));
             }
@@ -6060,9 +6105,13 @@ function submitShiftCorrectionRequest(idx, dateLabel, oldShift, newShift, reason
         } else {
           pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
         }
-        // Extra pushes for reliability
         try{
           pushWithFallback(FIREBASE_DB_URL+'/retail_roster_requests_v2.json', JSON.stringify(reqs), 'requests_v2');
+        }catch(e){}
+        // JSONSTORE fallback - works even if Firebase blocks, enables mobile->desktop
+        try{
+          fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-requests',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:req.id, request:req, ts:Date.now()}),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE SUBMIT: jsonstore all-requests', res.ok); }).catch(function(){});
+          fetch('https://www.jsonstore.io/api/bins/repco-roster-live-'+req.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(req),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE SUBMIT: jsonstore single', res.ok); }).catch(function(){});
         }catch(e){}
         if(typeof BroadcastChannel!=='undefined'){
           try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'new_request', id:req.id, request:req, ts:Date.now()}); console.log('LIVE SUBMIT: BroadcastChannel sent'); }catch(e){}
@@ -6074,6 +6123,7 @@ function submitShiftCorrectionRequest(idx, dateLabel, oldShift, newShift, reason
     console.error('submitShiftCorrectionRequest error', e);
   }
 }
+
 
 
 
