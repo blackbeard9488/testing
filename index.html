@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_JSONSTORE_429_V89";
+const BUILD_ID="20261022690000_FIX_SYNTAX_2_V90";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -980,160 +980,70 @@ function applyCloudState(state,isInitial){
 
 
 
-async function cloudLoad(){
-try{
-    if(db){
-      var snap=await db.ref('repco_state').once('value'); var data=snap.val();
-      if(data && data._ts){
-        var localTs=parseInt(safeGet('repco_cloud_ts')||'0');
-        if(data._ts>localTs){ applyCloudState(data,true); safeSet('repco_cloud_ts',String(data._ts)); toast('Synced from cloud'); }
-        // LIVE: Listen for real-time changes - pushes instantly to employee phones
-        db.ref('repco_state').on('value',function(s){
-          var d=s.val(); if(!d||!d._ts) return;
-          var lastTs=parseInt(safeGet('repco_cloud_ts')||'0');
-          if(d._ts>lastTs){
+async async function cloudLoad(){
+  try{
+    if(typeof db!=='undefined' && db && db.ref){
+      db.ref('repco_state').on('value', function(snapshot){
+        try{
+          var state=snapshot.val();
+          if(!state) return;
+          var localTs=parseInt(safeGet('repco_cloud_ts')||'0');
+          var cloudTs=state._ts||0;
+          if(cloudTs>localTs){
             console.log('LIVE SYNC: New data from Firebase, applying to employee phone');
-            applyCloudState(d,false); 
-            safeSet('repco_cloud_ts',String(d._ts));
-            try{
-              // If employee is on My Schedule, re-render instantly
-              var isMySched=document.getElementById('mysched-page') && document.getElementById('mysched-page').classList.contains('show');
-              if(isMySched) renderMySchedule();
-              // Check if any request was denied/approved and show toast
-              if(d['retail_roster_requests_v2']){
-                var reqs=JSON.parse(d['retail_roster_requests_v2']);
-                var myUser=(safeGet('repco_username')||'').toLowerCase();
-                var denied=reqs.filter(function(r){ return r.username&&r.username.toLowerCase()===myUser && (r.status==='denied'||r.status==='rejected'); });
-                if(denied.length>0){
-                  var latest=denied[denied.length-1];
-                  if(latest.deniedTs && Date.now()-latest.deniedTs < 10000){
-                    toast('Your request for '+ (latest.shiftDate||'') +' was DENIED by admin - LIVE UPDATE');
-                  }
-                }
-              }
-            }catch(e){}
+            safeSet('repco_cloud_ts', String(cloudTs));
+            applyCloudState(state, false);
           }
-        }); 
-        setInterval(function(){ try{ var reqs=safeGetJSON('retail_roster_requests_v2',[]); var lastUpdate=safeGet('retail_roster_requests_update_ts'); if(lastUpdate){ renderMySchedule(); } }catch(e){} },2000);
-        setInterval(async function(){
-          try{
-            var ss=await db.ref('repco_state').once('value'); var dd=ss.val();
-            if(dd && dd._ts){
-              var lt=parseInt(safeGet('repco_cloud_ts')||'0');
-              if(dd._ts>lt){ applyCloudState(dd,false); safeSet('repco_cloud_ts',String(dd._ts)); }
-            }
-          }catch(e){}
-        },3000);
-        return;
-      }
+        }catch(e){ console.log('cloudLoad onValue error', e); }
+      });
     }
-    // REST API fallback - LIVE polling every 2 seconds for employee
-    var res=await fetch(FIREBASE_DB_URL+'/repco_state.json',{cache:'no-store'});
-    if(res.ok){ var data=await res.json(); if(data&&data._ts){ var localTs=parseInt(safeGet('repco_cloud_ts')||'0'); if(data._ts>localTs){ applyCloudState(data,true); safeSet('repco_cloud_ts',String(data._ts)); } } }
-  }catch(e){ console.log("cloudLoad",e); }
-  // LIVE SYNC FOR EMPLOYEE: Check every 2 seconds for request status changes
-  // Also check separate requests path for live denial - DANIEL FIX
+  }catch(e){ console.log('cloudLoad init error', e); }
+
+  // Poll Firebase REST as fallback (cors + no-cors) - for when SDK blocked
+  setInterval(async function(){
+    try{
+      var rr=await fetch(FIREBASE_DB_URL+'/repco_state.json?_t='+Date.now(),{cache:'no-store', mode:'cors'});
+      if(!rr.ok) return;
+      var cloudState=await rr.json();
+      if(!cloudState || !cloudState._ts) return;
+      var localTs=parseInt(safeGet('repco_cloud_ts')||'0');
+      if(cloudState._ts>localTs){
+        console.log('LIVE SYNC: New data from Firebase REST, applying');
+        safeSet('repco_cloud_ts', String(cloudState._ts));
+        applyCloudState(cloudState, false);
+      }
+    }catch(e){ console.log('Firebase REST poll error', e.message); }
+  },3000);
+
+  // Poll requests_v2 directly for denied/approved that should overwrite pending - DANIEL FIX
   setInterval(async function(){
     try{
       var rr=await fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json?_t='+Date.now(),{cache:'no-store', mode:'cors'});
-      if(rr.ok){
-        var cloudReqs2=await rr.json();
-        if(Array.isArray(cloudReqs2)){
-          var localReqs2=safeGetJSON('retail_roster_requests_v2',[]);
-          var hasNewDenied=false;
-          for(var ci=0;ci<cloudReqs2.length;ci++){
-            var cr=cloudReqs2[ci];
-            if(!cr || cr.status!=='denied') continue;
-            var found=localReqs2.find(function(lr){ return lr.id===cr.id; });
-            if(!found || found.status==='pending'){
-              hasNewDenied=true;
-              console.log('LIVE SYNC: Found denied in separate path, applying', cr.id);
-              break;
-            }
-          }
-          if(hasNewDenied){
-            // Merge via applyCloudState logic - force update
-            var fakeState={};
-            fakeState['retail_roster_requests_v2']=JSON.stringify(cloudReqs2);
-            fakeState._ts=Date.now();
-            applyCloudState(fakeState,false);
-            safeSet('repco_cloud_ts', String(Date.now()));
-            try{ renderMySchedule(); }catch(e){}
-          }
+      if(!rr.ok) return;
+      var cloudReqs2=await rr.json();
+      if(!Array.isArray(cloudReqs2)) return;
+      var localReqs2=safeGetJSON('retail_roster_requests_v2',[]);
+      var hasNewDenied=false;
+      for(var ci=0;ci<cloudReqs2.length;ci++){
+        var cr=cloudReqs2[ci];
+        if(!cr || (cr.status!=='denied' && cr.status!=='rejected' && cr.status!=='approved')) continue;
+        var found=localReqs2.find(function(lr){ return lr.id===cr.id; });
+        if(!found || found.status==='pending'){
+          hasNewDenied=true;
+          console.log('LIVE SYNC: Found denied via requests_v2 REST', cr.id);
+          break;
         }
       }
-    }catch(e){}
+      if(hasNewDenied){
+        var fakeState={};
+        fakeState['retail_roster_requests_v2']=JSON.stringify(cloudReqs2);
+        fakeState._ts=Date.now();
+        applyCloudState(fakeState, false);
+      }
+    }catch(e){ console.log('requests_v2 REST poll error', e.message); }
   },3000);
-  setInterval(async function(){
-    try{
-      var r=await fetch(FIREBASE_DB_URL+'/repco_state.json?_t='+Date.now(),{cache:'no-store', mode:'cors'});
-      if(!r.ok) return;
-      var d=await r.json();
-      if(d && d._ts){
-        var lt=parseInt(safeGet('repco_cloud_ts')||'0');
-        if(d._ts>lt){
-          console.log('LIVE POLL: New data detected, applying - employee will see DENIED/APPROVED instantly');
-          applyCloudState(d,false); 
-          safeSet('repco_cloud_ts',String(d._ts));
-          // Auto re-render My Schedule if open - LIVE UPDATE
-          try{
-            var isMySched=document.getElementById('mysched-page') && document.getElementById('mysched-page').classList.contains('show');
-            if(isMySched){
-              renderMySchedule();
-            }
-            // Also check if requests changed and show live toast for denial
-            if(d['retail_roster_requests_v2']){
-              var cloudReqs=JSON.parse(d['retail_roster_requests_v2']);
-              var localReqs=safeGetJSON('retail_roster_requests_v2',[]);
-              var myUser=(safeGet('repco_username')||'').toLowerCase();
-              // Find newly denied
-              for(var i=0;i<cloudReqs.length;i++){
-                var cr=cloudReqs[i];
-                if(!cr || cr.username.toLowerCase()!==myUser) continue;
-                if(cr.status==='denied'||cr.status==='rejected'){
-                  var localMatch=localReqs.find(function(lr){ return lr.id===cr.id; });
-                  if(!localMatch || localMatch.status==='pending'){
-                    // Status changed from pending to denied - LIVE
-                    console.log('LIVE: Request', cr.id, 'changed to DENIED, updating employee UI');
-                    toast('LIVE UPDATE: Your request for '+(cr.shiftDate||'')+' was '+cr.status.toUpperCase()+' by admin');
-                    break;
-                  }
-                }
-                if(cr.status==='approved'){
-                  var localMatch=localReqs.find(function(lr){ return lr.id===cr.id; });
-                  if(!localMatch || localMatch.status==='pending'){
-                    console.log('LIVE: Request', cr.id, 'changed to APPROVED');
-                    toast('LIVE UPDATE: Your request for '+(cr.shiftDate||'')+' was APPROVED ✓');
-                    break;
-                  }
-                }
-              }
-            }
-          }catch(e){ console.error('Live render error', e); }
-        }
-      }
-    }catch(e){ console.error('Live poll error', e); }
-  },2000);
-  // Extra fast check when My Schedule page is open - every 1 second
-  setInterval(function(){
-    try{
-      var isMySched=document.getElementById('mysched-page') && document.getElementById('mysched-page').classList.contains('show');
-      if(isMySched){
-        // Force re-render to show any status changes that arrived via cloud
-        var lastCheck=safeGet('repco_last_mysched_render')||'0';
-        var now=Date.now();
-        if(now-parseInt(lastCheck) > 1000){
-          safeSet('repco_last_mysched_render', String(now));
-          renderMySchedule();
-        }
-      }
-    }catch(e){}
-  },1000);
-
-  // JSONSTORE fallback polling for mobile->desktop requests - enables cross-device sync when Firebase blocks
-  setInterval(async function(){
-}catch(e){ console.log('jsonstore requests poll error', e.message); }
-  },2000);
+}
+,2000);
 l(async function(){
 }catch(e){}
   },3000);
