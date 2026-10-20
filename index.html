@@ -513,7 +513,7 @@ body:not(.is-admin) .daily-total-casual {
 </div></div>
 
 <div id="repco-v65">
-<div id="my-schedule-card" style="display:none;background:#fff;border:3px solid #111;border-radius:12px;padding:12px 14px;margin:10px 14px;box-shadow:4px 4px 0 #111;justify-content:flex-start;align-items:center;gap:12px;flex-wrap:wrap"><div class="left"><div class="label" id="my-sched-label" style="font-size:11px;background:#111;color:#fff;border-radius:9999px;padding:4px 10px;display:inline-block;margin-bottom:4px;font-weight:900">MY SCHEDULE</div><div class="shift" id="my-sched-shift" style="font-size:16px;font-weight:900">-</div><div class="meta" id="my-sched-date" style="font-size:12px;font-weight:700;color:#555">-</div></div><div class="right" style="text-align:right"><div class="remaining" id="my-sched-remaining" style="font-size:18px;font-weight:900;color:#E30613">-</div><div class="meta" id="my-sched-until" style="font-size:12px;font-weight:700;color:#555">-</div></div></div>
+<div id="my-schedule-card" style="display:none;background:#fff;border:3px solid #111;border-radius:12px;padding:12px 14px;margin:10px 14px;box-shadow:4px 4px 0 #111;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><div class="left"><div class="label" id="my-sched-label" style="font-size:11px;background:#111;color:#fff;border-radius:9999px;padding:4px 10px;display:inline-block;margin-bottom:4px;font-weight:900">MY SCHEDULE</div><div class="shift" id="my-sched-shift" style="font-size:16px;font-weight:900">-</div><div class="meta" id="my-sched-date" style="font-size:12px;font-weight:700;color:#555">-</div></div><div class="right" style="text-align:right"><div class="remaining" id="my-sched-remaining" style="font-size:18px;font-weight:900;color:#E30613">-</div><div class="meta" id="my-sched-until" style="font-size:12px;font-weight:700;color:#555">-</div></div></div>
   <div class="r-controls"><select id="fortnight-select"></select><button onclick="prevFortnight()">PREV</button><button onclick="nextFortnight()">NEXT</button><button onclick="toggleTimeFormat()">12H/24H</button><button id="delete-roster-btn" id="delete-roster-btn" onclick="deleteCurrentRoster()" style="background:#E30613;color:#fff">DELETE ROSTER</button><span id="user-badge" style="margin-left:auto;background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:11px"></span><span id="admin-total-badge" style="display:none;background:#E30613;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:11px;margin-left:8px"></span><span id="brisbane-time-v141" style="background:#fff;border:2px solid #111;border-radius:9999px;padding:6px 10px;font-weight:900;font-size:11px"></span></div>
   <div id="roster-mount"></div>
 </div>
@@ -580,7 +580,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022640000_TIME_PANEL_FIX_V68";
+const BUILD_ID="20261022650000_FIX_ALL_V69";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -2780,7 +2780,7 @@ function approveReq(i){
   toast('Approved - '+(matched?'shift updated':'marked approved'));
 }
 function denyReq(i){
-  console.log('DENY: Admin clicked deny index', i);
+  console.log('DENY: Admin denying index', i);
   try{
     let reqs=safeGetJSON('retail_roster_requests_v2',[]);
     let r=reqs[i];
@@ -2798,55 +2798,44 @@ function denyReq(i){
     try{ renderRequests(); }catch(e){}
     try{ renderMySchedule(); }catch(e){}
     toast('DENIED: '+r.username+' '+r.shiftDate+' - Pushing live...');
-    // Use EXACT same live push as submitShiftCorrectionRequest - this is proven to work instantly for Daniel's requests
+    // Use EXACT same live push as submitShiftCorrectionRequest which is proven to work for Daniel's two devices
     setTimeout(function(){
       try{
-        var state=null;
-        if(typeof getAllState==='function') state=getAllState();
-        else state={retail_roster_requests_v2:JSON.stringify(reqs), _ts:Date.now()};
-        if(state){
-          state._ts=Date.now();
-          state._lastDeniedId=r.id;
-          state._lastDeniedUser=r.username;
-          state._lastDeniedTs=Date.now();
-          // Don't set repco_cloud_ts before push - let employee see new _ts > old _ts
-          if(typeof db!=='undefined' && db && db.ref){
-            db.ref('repco_state').set(state).then(function(){ 
-              console.log('LIVE DENY: Firebase SDK push OK - Daniel will see instantly like his own requests');
-              safeSet('repco_cloud_ts', String(state._ts));
-              toast('Live: Denied pushed via SDK');
-            }).catch(function(err){ 
-              console.error('LIVE DENY: SDK failed', err);
-              // Fallback to REST
-              fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state),mode:'cors',cache:'no-store'}).then(function(res){
-                console.log('LIVE DENY: REST fallback', res.ok, res.status);
-                safeSet('repco_cloud_ts', String(state._ts));
-              });
-            });
-          } else {
+        var state=getAllState();
+        state._ts=Date.now();
+        state._lastDeniedId=r.id;
+        state._lastDeniedUser=r.username;
+        state._lastDeniedTs=Date.now();
+        if(typeof db!=='undefined' && db && db.ref){
+          db.ref('repco_state').set(state).then(function(){ 
+            console.log('LIVE DENY: SDK OK - admin notified, Daniel sees instantly');
+            safeSet('repco_cloud_ts', String(state._ts));
+          }).catch(function(err){ 
+            console.error('SDK failed', err);
             fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state),mode:'cors',cache:'no-store'}).then(function(res){
-              console.log('LIVE DENY: REST push', res.ok, res.status);
+              console.log('LIVE DENY: REST fallback', res.ok);
               safeSet('repco_cloud_ts', String(state._ts));
-              if(res.ok) toast('Live: Denied pushed via REST');
-            }).catch(function(err){
-              console.error('LIVE DENY: REST failed', err);
-              // Try no-cors as last resort
-              try{ fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',body:JSON.stringify(state),mode:'no-cors',cache:'no-store'}).then(function(){ safeSet('repco_cloud_ts', String(state._ts)); }); }catch(e){}
             });
-          }
-          // Also push to separate paths for extra reliability (same as before but after main push)
-          try{
-            fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(reqs),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE DENY: requests_v2', res.ok); }).catch(function(){});
-            fetch(FIREBASE_DB_URL+'/denied_requests/'+r.id+'.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(r),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE DENY: denied_single', res.ok); }).catch(function(){});
-          }catch(e){}
-          if(typeof BroadcastChannel!=='undefined'){
-            try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'request_denied', id:r.id, request:r, ts:Date.now()}); console.log('LIVE DENY: BroadcastChannel sent'); }catch(e){}
-          }
+          });
+        } else {
+          fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state),mode:'cors',cache:'no-store'}).then(function(res){
+            console.log('LIVE DENY: REST', res.ok);
+            safeSet('repco_cloud_ts', String(state._ts));
+          });
         }
-      }catch(e){ console.error('LIVE DENY: Cloud error', e); }
-    },500); // Same 500ms delay as submitShiftCorrectionRequest - proven to work
+        // Extra pushes for reliability
+        try{
+          fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(reqs),mode:'cors',cache:'no-store'});
+          fetch(FIREBASE_DB_URL+'/denied_requests/'+r.id+'.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(r),mode:'cors',cache:'no-store'});
+        }catch(e){}
+        if(typeof BroadcastChannel!=='undefined'){
+          try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'request_denied', id:r.id, request:r, ts:Date.now()}); }catch(e){}
+        }
+      }catch(e){ console.error('DENY cloud error', e); }
+    },500);
   }catch(e){ console.error('DENY error', e); toast('Error: '+e.message); }
 }
+
 
 
 
@@ -5042,6 +5031,79 @@ function renderMySchedule(){
     }
     allShifts.sort(function(a,b){ return (a.iso||'').localeCompare(b.iso||''); });
     var htmlStr='';
+    // TIME TILL SHIFT END PANEL - Always show at top of My Schedule page
+    var timePanelHtml='';
+    try{
+      var nowForTime=new Date();
+      var brisbaneNowForTime=null;
+      try{
+        var fmtTime=new Intl.DateTimeFormat('en-AU',{timeZone:'Australia/Brisbane',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+        var partsTime=fmtTime.formatToParts(nowForTime);
+        var yTime=parseInt(partsTime.find(function(p){return p.type==='year';}).value);
+        var moTime=parseInt(partsTime.find(function(p){return p.type==='month';}).value)-1;
+        var dTime=parseInt(partsTime.find(function(p){return p.type==='day';}).value);
+        var hhTime=parseInt(partsTime.find(function(p){return p.type==='hour';}).value);
+        var mmTime=parseInt(partsTime.find(function(p){return p.type==='minute';}).value);
+        var ssTime=parseInt(partsTime.find(function(p){return p.type==='second';}).value);
+        brisbaneNowForTime=new Date(yTime,moTime,dTime,hhTime,mmTime,ssTime);
+      }catch(e){ brisbaneNowForTime=new Date(); }
+      var myStaffForTime=null;
+      try{ myStaffForTime=findMyStaff(cur); }catch(e){}
+      if(!myStaffForTime){
+        try{ myStaffForTime=findMyStaff(getCurrentFortnight()); }catch(e){}
+      }
+      if(myStaffForTime && cur && cur.dates){
+        var timeShift=null;
+        var timeShiftDate=null;
+        var timeShiftStart=null;
+        var timeShiftEnd=null;
+        for(var ti=0;ti<cur.dates.length;ti++){
+          var td=cur.dates[ti];
+          var tsh=(myStaffForTime.shifts && myStaffForTime.shifts[ti]!=null) ? myStaffForTime.shifts[ti] : 'OFF';
+          var tup=String(tsh).toUpperCase().trim();
+          if(['OFF','NA','AB','ABSENT',''].indexOf(tup)!==-1 || tup==='') continue;
+          var tParsed=parseShiftRange(tsh);
+          if(!tParsed) continue;
+          var tIso=td.iso;
+          if(!tIso) continue;
+          var tStart=new Date(tIso);
+          tStart.setHours(Math.floor(tParsed.start/60), tParsed.start%60, 0, 0);
+          var tEnd=new Date(tIso);
+          tEnd.setHours(Math.floor(tParsed.end/60), tParsed.end%60, 0, 0);
+          if(tEnd<=tStart) tEnd.setDate(tEnd.getDate()+1);
+          if(brisbaneNowForTime>=tStart && brisbaneNowForTime<tEnd){
+            timeShift=tsh; timeShiftDate=td; timeShiftStart=tStart; timeShiftEnd=tEnd; break;
+          }
+          if(!timeShift && brisbaneNowForTime<tStart){
+            timeShift=tsh; timeShiftDate=td; timeShiftStart=tStart; timeShiftEnd=tEnd;
+          }
+        }
+        if(timeShift && timeShiftDate && timeShiftStart && timeShiftEnd){
+          var diff=timeShiftEnd - brisbaneNowForTime;
+          var isCurrent=brisbaneNowForTime>=timeShiftStart && brisbaneNowForTime<timeShiftEnd;
+          var countdownText='';
+          var progress=0;
+          if(isCurrent){
+            var totalMin=Math.floor(diff/60000);
+            var h=Math.floor(totalMin/60);
+            var m=totalMin%60;
+            countdownText=(h>0?h+'h '+m+'m':m+'m')+' remaining - Ends '+String(timeShiftEnd.getHours()).padStart(2,'0')+':'+String(timeShiftEnd.getMinutes()).padStart(2,'0');
+            var total=timeShiftEnd - timeShiftStart;
+            var elapsed=brisbaneNowForTime - timeShiftStart;
+            progress=Math.min(100, Math.max(0, (elapsed/total)*100));
+          } else {
+            var totalMin=Math.floor((timeShiftStart - brisbaneNowForTime)/60000);
+            var h=Math.floor(totalMin/60);
+            var m=totalMin%60;
+            var d=Math.floor(h/24);
+            if(d>0) countdownText='Starts in '+d+'d '+(h%24)+'h - '+timeShiftDate.day+' '+timeShiftDate.date;
+            else if(h>0) countdownText='Starts in '+h+'h '+m+'m - '+timeShiftDate.day+' '+timeShiftDate.date+' '+timeShift;
+            else countdownText='Starts in '+m+' minutes - '+timeShiftDate.day+' '+timeShiftDate.date;
+          }
+          timePanelHtml='<div class="card" style="background:#111;color:#fff;border:3px solid #E30613;padding:12px"><div style="font-weight:900;font-size:11px;color:#FFEB3B">TIME TILL SHIFT END</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+timeShiftDate.day+' '+timeShiftDate.date+' - '+timeShift+'</div><div style="font-weight:900;font-size:14px;color:#B6F7C5">'+countdownText+'</div>'+(isCurrent?'<div style="margin-top:8px;background:#333;height:8px;border-radius:9999px;overflow:hidden"><div style="width:'+progress+'%;background:#E30613;height:100%"></div></div>':'')+'</div>';
+        }
+      }
+    }catch(e){ console.error('Time panel error', e); }
     var currentShift=null;
     var upcoming=[];
     for(var i=0;i<allShifts.length;i++){
