@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_TRY_CATCH_V94";
+const BUILD_ID="20261022690000_FIX_TRY_CATCH_2_V95";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -2720,8 +2720,6 @@ function adminEditUser(idx){ let users=safeGetJSON('retail_roster_users_v1',[]);
       try{
         pushWithFallback(FIREBASE_DB_URL+'/retail_roster_users_v1.json', JSON.stringify(users), 'users_v1');
       }catch(e){}
-      try{
-      }catch(e){}
       if(typeof BroadcastChannel!=='undefined'){
         try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'user_edit', users:users, ts:Date.now()}); }catch(e){}
       }
@@ -2747,7 +2745,7 @@ function adminDelUser(idx){ let users=safeGetJSON('retail_roster_users_v1',[]); 
         pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
       }
       try{ pushWithFallback(FIREBASE_DB_URL+'/retail_roster_users_v1.json', JSON.stringify(users), 'users_v1'); }catch(e){}
-      try{     }catch(e){ console.error('LIVE USER DELETE error', e); }
+    }catch(e){ console.error('LIVE USER DELETE error', e); }
   },500);
 }); }
 
@@ -5527,7 +5525,7 @@ function changePassword(){
         pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
       }
       try{ pushWithFallback(FIREBASE_DB_URL+'/retail_roster_users_v1.json', JSON.stringify(users), 'users_v1'); }catch(e){}
-      try{     }catch(e){}
+      
   },500);
 }
 
@@ -5708,8 +5706,7 @@ function deleteMyRequest(idx){
             try{
               pushWithFallback(FIREBASE_DB_URL+'/retail_roster_requests_v2.json', JSON.stringify(reqs), 'requests_v2');
             }catch(e){}
-            try{
-            }catch(e){}
+            
             if(typeof BroadcastChannel!=='undefined'){
               try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'delete_request', id:deletedId, ts:Date.now()}); }catch(e){}
             }
@@ -6186,9 +6183,7 @@ function submitShiftCorrectionRequest(idx, dateLabel, oldShift, newShift, reason
           pushWithFallback(FIREBASE_DB_URL+'/retail_roster_requests_v2.json', JSON.stringify(reqs), 'requests_v2');
         }catch(e){}
         // JSONS// JSONSTORE fallback removed - Firebase only now
-        try{
-
-        }catch(e){}
+        
         if(typeof BroadcastChannel!=='undefined'){
           try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'new_request', id:req.id, request:req, ts:Date.now()}); console.log('LIVE SUBMIT: BroadcastChannel sent'); }catch(e){}
         }
