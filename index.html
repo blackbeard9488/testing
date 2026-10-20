@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022700012_FIX_REFRESH_MENU_LOGOUT_V136";
+const BUILD_ID="20261022700014_FIX_G_AND_LUKE_V138";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -5937,8 +5937,27 @@ function renderMySchedule(){
       if(found){
         var reqData=found.req; var reqIdx=found.index; var reqStatus=found.status||reqData.status||'pending';
         if(reqStatus==='approved'){
-          // Approved - green, tappable for fresh request (same as normal shift, no buttons, no TAP text)
-          htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+currentShift.idx+', \''+currentShift.date.date+' '+currentShift.date.day+'\', \''+String(currentShift.shift).replace(/'/g, '')+ '\')"><div style="font-weight:900;font-size:12px;color:#111">CURRENT SHIFT - APPROVED & ACTIONED ✓</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+phCurrIcon+currentShift.date.day+' '+currentShift.date.date+(phCurr?' 🎉':'')+' - '+fmt(reqData.oldShift||'')+' → '+fmt(reqData.newShift||currentShift.shift)+'</div><div style="font-size:11px">Reason: '+(reqData.reason||'')+'<br>Status: <b style="color:#111;background:#fff;border-radius:9999px;padding:2px 6px">APPROVED by '+(reqData.approvedBy||'admin')+'</b> - Shift updated</div></div>';
+          // V137: If admin edited roster after approval, show roster not approved
+          var rosterNormCurr = String(currentShift.shift||'').trim().toUpperCase();
+          var approvedNewNormCurr = String(reqData.newShift||'').trim().toUpperCase();
+          var approvedOldNormCurr = String(reqData.oldShift||'').trim().toUpperCase();
+          if(rosterNormCurr && approvedNewNormCurr && rosterNormCurr!==approvedNewNormCurr && rosterNormCurr!==approvedOldNormCurr){
+            console.log('V137: Current roster', currentShift.shift, 'differs from approved', reqData.newShift, '- admin override');
+            try{
+              var allReqsForFixCurr=safeGetJSON('retail_roster_requests_v2',[]);
+              var fixIdxCurr=allReqsForFixCurr.findIndex(function(r){ return r.id===reqData.id; });
+              if(fixIdxCurr!==-1 && allReqsForFixCurr[fixIdxCurr].status==='approved'){
+                allReqsForFixCurr[fixIdxCurr].status='superseded';
+                allReqsForFixCurr[fixIdxCurr].supersededTs=Date.now();
+                allReqsForFixCurr[fixIdxCurr].supersededNote='Auto-superseded current: Admin edited roster from '+reqData.newShift+' to '+currentShift.shift+' after approval';
+                safeSetJSON('retail_roster_requests_v2', allReqsForFixCurr);
+                try{ fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(allReqsForFixCurr),mode:'cors'}).catch(function(){}); }catch(e){}
+              }
+            }catch(e){}
+            htmlStr+='<div class="card" style="background:#111;color:#fff;border:3px solid #E30613;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+currentShift.idx+', \''+currentShift.date.date+' '+currentShift.date.day+'\', \''+String(currentShift.shift).replace(/'/g, '')+ '\')"><div style="font-weight:900;font-size:12px;color:#FFEB3B">CURRENT SHIFT - UPDATED BY ADMIN</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+phCurrIcon+currentShift.date.day+' '+currentShift.date.date+(phCurr?' 🎉':'')+' - '+fmt(currentShift.shift)+phCurrBadge+'</div><div style="font-size:11px">Your approved request ('+fmt(reqData.newShift)+') was overridden by admin<br>Now: <b>'+fmt(currentShift.shift)+'</b></div></div>';
+          } else {
+            htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+currentShift.idx+', \''+currentShift.date.date+' '+currentShift.date.day+'\', \''+String(currentShift.shift).replace(/'/g, '')+ '\')"><div style="font-weight:900;font-size:12px;color:#111">CURRENT SHIFT - APPROVED & ACTIONED ✓</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+phCurrIcon+currentShift.date.day+' '+currentShift.date.date+(phCurr?' 🎉':'')+' - '+fmt(reqData.oldShift||'')+' → '+fmt(reqData.newShift||currentShift.shift)+'</div><div style="font-size:11px">Reason: '+(reqData.reason||'')+'<br>Status: <b style="color:#111;background:#fff;border-radius:9999px;padding:2px 6px">APPROVED by '+(reqData.approvedBy||'admin')+'</b> - Shift updated</div></div>';
+          }
         } else if(reqStatus==='denied'){
           // Denied - grey, tappable for fresh request (same as normal, no TAP text)
           htmlStr+='<div class="card" style="background:#E5E5E5;border:2px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+currentShift.idx+', \''+currentShift.date.date+' '+currentShift.date.day+'\', \''+String(currentShift.shift).replace(/'/g, '')+ '\')"><div style="font-weight:900;font-size:12px;color:#E30613">CURRENT SHIFT - REJECTED / DENIED</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+phCurrIcon+currentShift.date.day+' '+currentShift.date.date+(phCurr?' 🎉':'')+' - '+fmt(currentShift.shift)+phCurrBadge+'</div><div style="font-size:11px">Your request to change to '+(reqData.newShift||'')+' was <b>REJECTED / DENIED</b><br>Status: <b style="color:#E30613">DENIED by '+(reqData.deniedBy||'admin')+'</b> - Reverted to original</div></div>';
@@ -5971,8 +5990,27 @@ function renderMySchedule(){
         if(foundU){
           var reqU=foundU.req; var reqIdx=foundU.index; var reqStatus=foundU.status||reqU.status||'pending';
           if(reqStatus==='approved'){
-            // Approved now tappable like normal shift, no buttons, no TAP text - only switches to pending when new request submitted
-            htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+u.idx+', \''+u.date.date+' '+u.date.day+'\', \''+String(u.shift).replace(/'/g, '')+ '\')"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(reqU.oldShift||'')+' → <b>'+fmt(reqU.newShift||u.shift)+'</b><br><span style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">APPROVED & ACTIONED ✓</span><br><small>Approved by '+(reqU.approvedBy||'admin')+'</small></div>';
+            // V137: Check if admin overrode approved shift - if roster differs from approved newShift, show roster
+            var rosterNorm = String(u.shift||'').trim().toUpperCase();
+            var approvedNewNormU = String(reqU.newShift||'').trim().toUpperCase();
+            var approvedOldNormU = String(reqU.oldShift||'').trim().toUpperCase();
+            if(rosterNorm && approvedNewNormU && rosterNorm!==approvedNewNormU && rosterNorm!==approvedOldNormU){
+              console.log('V137: Upcoming roster', u.shift, 'differs from approved', reqU.newShift, '- admin override');
+              try{
+                var allReqsForFixU=safeGetJSON('retail_roster_requests_v2',[]);
+                var fixIdxU=allReqsForFixU.findIndex(function(r){ return r.id===reqU.id; });
+                if(fixIdxU!==-1 && allReqsForFixU[fixIdxU].status==='approved'){
+                  allReqsForFixU[fixIdxU].status='superseded';
+                  allReqsForFixU[fixIdxU].supersededTs=Date.now();
+                  allReqsForFixU[fixIdxU].supersededNote='Auto-superseded in upcoming: Admin edited roster from '+reqU.newShift+' to '+u.shift+' after approval';
+                  safeSetJSON('retail_roster_requests_v2', allReqsForFixU);
+                  try{ fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(allReqsForFixU),mode:'cors'}).catch(function(){}); }catch(e){}
+                }
+              }catch(e){}
+              htmlStr+='<div class="card" style="background:#111;color:#fff;border:2px solid #E30613;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+u.idx+', \''+u.date.date+' '+u.date.day+'\', \''+String(u.shift).replace(/'/g, '')+ '\')"><b>'+u.date.day+' '+u.date.date+'</b> - <b>'+fmt(u.shift)+'</b><br><span style="background:#FFEB3B;color:#111;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">UPDATED BY ADMIN</span><br><small>Was approved '+fmt(reqU.newShift)+', now '+fmt(u.shift)+'</small></div>';
+            } else {
+              htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+u.idx+', \''+u.date.date+' '+u.date.day+'\', \''+String(u.shift).replace(/'/g, '')+ '\')"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(reqU.oldShift||'')+' → <b>'+fmt(reqU.newShift||u.shift)+'</b><br><span style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">APPROVED & ACTIONED ✓</span><br><small>Approved by '+(reqU.approvedBy||'admin')+'</small></div>';
+            }
           } else if(reqStatus==='denied'){
             // Denied now tappable like normal shift, no buttons, no TAP text
             htmlStr+='<div class="card" style="background:#E5E5E5;border:2px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+u.idx+', \''+u.date.date+' '+u.date.day+'\', \''+String(u.shift).replace(/'/g, '')+ '\')"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+' <span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">REJECTED / DENIED</span> - Reverted to original<br><small>Request for '+fmt(reqU.newShift||'')+' <b>DENIED</b></small></div>';
