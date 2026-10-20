@@ -351,7 +351,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022080000_FIX_LOGIN_AND_PENDING_V12";
+const BUILD_ID="20261022090000_FIX_PENDING_COLOUR_V13";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -3962,6 +3962,7 @@ function renderUnavailable(){
 
 
 
+
 function requestShiftCorrectionFromSchedule(idx, dateLabel, oldShift){
   try{
     if(typeof updateActivity==='function') updateActivity();
@@ -3985,7 +3986,7 @@ function requestShiftCorrectionFromSchedule(idx, dateLabel, oldShift){
     if(!dateObj && cur && cur.dates[idx]) dateObj=cur.dates[idx];
     var shiftLabel=dateObj?dateObj.day+' '+dateObj.date:dateLabel;
     var currentShift=oldShift||'OFF';
-    // Check if already pending
+    // Check if already pending - show edit/cancel options
     var reqs=safeGetJSON('retail_roster_requests_v2',[]);
     var myUsername=(safeGet('repco_username')||'').toLowerCase();
     for(var rr=0;rr<reqs.length;rr++){
@@ -3995,65 +3996,120 @@ function requestShiftCorrectionFromSchedule(idx, dateLabel, oldShift){
       if(r.status!=='pending') continue;
       if(r.shiftDate===shiftLabel || (dateObj && r.shiftISO===dateObj.iso)){
         var reqIdx=reqs.indexOf(r);
-        showCustomConfirm('Already Pending', '<div style="font-size:11px">You already have a pending request for '+shiftLabel+':<br><b>'+r.oldShift+' -> '+r.newShift+'</b><br><br>Do you want to edit it?<br><br><button onclick="hideCustomConfirm(); setTimeout(function(){ editMyRequest('+reqIdx+'); },200)" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px;margin:4px">EDIT EXISTING</button> <button onclick="hideCustomConfirm(); setTimeout(function(){ deleteMyRequest('+reqIdx+'); },200)" style="background:#E30613;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px;margin:4px">CANCEL EXISTING</button></div>', function(){ hideCustomConfirm(); });
+        // Direct modal for existing pending
+        var existingHtml='<div style="font-size:11px">You already have a pending request for <b>'+shiftLabel+'</b>:<br><b>'+r.oldShift+' -> '+r.newShift+'</b><br>Reason: '+(r.reason||'')+'<br><br>What do you want to do?</div>';
+        var modal=document.getElementById('custom-modal');
+        var t=document.getElementById('custom-modal-title');
+        var b=document.getElementById('custom-modal-body');
+        var ok=document.getElementById('custom-modal-ok');
+        var cancel=document.getElementById('custom-modal-cancel');
+        if(modal && t && b){
+          t.textContent='Already Pending - '+shiftLabel;
+          b.innerHTML=existingHtml + '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button id="btn-edit-existing" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;font-size:10px">EDIT EXISTING</button><button id="btn-cancel-existing" style="background:#E30613;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;font-size:10px">CANCEL EXISTING</button><button id="btn-close-existing" style="background:#D9D9D9;border-radius:9999px;padding:8px 12px;font-weight:900;font-size:10px">CLOSE</button></div>';
+          ok.style.display='none';
+          cancel.style.display='none';
+          modal.classList.add('show');
+          setTimeout(function(){
+            var btnEdit=document.getElementById('btn-edit-existing');
+            var btnCancel=document.getElementById('btn-cancel-existing');
+            var btnClose=document.getElementById('btn-close-existing');
+            if(btnEdit) btnEdit.onclick=function(){ modal.classList.remove('show'); ok.style.display='block'; cancel.style.display='block'; setTimeout(function(){ editMyRequest(reqIdx); },200); };
+            if(btnCancel) btnCancel.onclick=function(){ modal.classList.remove('show'); ok.style.display='block'; cancel.style.display='block'; setTimeout(function(){ deleteMyRequest(reqIdx); },200); };
+            if(btnClose) btnClose.onclick=function(){ modal.classList.remove('show'); ok.style.display='block'; cancel.style.display='block'; };
+          },50);
+        }
         return;
       }
     }
-    // Build prompt HTML with inputs that will be read on confirm
-    var html='<div style="font-size:11px"><b>'+shiftLabel+'</b><br>Current: <b>'+currentShift+'</b><br><br>'+
+    // Create new request modal - FIXED: Read inputs BEFORE closing modal
+    var modal=document.getElementById('custom-modal');
+    var t=document.getElementById('custom-modal-title');
+    var bEl=document.getElementById('custom-modal-body');
+    var ok=document.getElementById('custom-modal-ok');
+    var cancel=document.getElementById('custom-modal-cancel');
+    if(!modal || !t || !bEl || !ok || !cancel){
+      // Fallback to prompt if modal not found
+      var ns=prompt('New shift for '+shiftLabel+' (Current: '+currentShift+')\nEnter OFF, NA, AB, or time like 08:00-16:30:');
+      if(!ns) return;
+      var rs=prompt('Reason for change:');
+      if(!rs) return;
+      submitShiftCorrectionRequest(idx, shiftLabel, currentShift, ns.trim(), rs.trim());
+      return;
+    }
+    t.textContent='Request Shift Change - '+shiftLabel;
+    bEl.innerHTML='<div style="font-size:11px"><b>'+shiftLabel+'</b><br>Current: <b>'+currentShift+'</b><br><br>'+
       'New shift (e.g., 08:00-16:30, OFF, NA):<br>'+
-      '<input id="new-shift-input" placeholder="OFF or 08:00-16:30" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;margin:8px 0;font-size:11px" value="">'+
+      '<input id="new-shift-input" placeholder="OFF or 08:00-16:30" style="width:100%;padding:10px;border-radius:9999px;border:2px solid #111;margin:8px 0;font-size:12px" value="" autocomplete="off">'+
       '<br>Reason:<br>'+
-      '<input id="new-reason-input" placeholder="Reason for change" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;margin:8px 0;font-size:11px" value="">'+
+      '<input id="new-reason-input" placeholder="Reason for change" style="width:100%;padding:10px;border-radius:9999px;border:2px solid #111;margin:8px 0;font-size:12px" value="" autocomplete="off">'+
+      '<div style="margin-top:8px;font-size:9px;color:#666">Tip: Use OFF for day off, NA for unavailable, AB for absent</div>'+
       '</div>';
-    // Use custom confirm with custom buttons
-    showCustomConfirm('Request Shift Change - '+shiftLabel, html, function(confirmed){
-      if(!confirmed) return;
+    ok.textContent='SUBMIT REQUEST';
+    ok.style.display='block';
+    ok.style.background='#111';
+    ok.style.color='#fff';
+    cancel.textContent='CANCEL';
+    cancel.style.display='block';
+    modal.classList.add('show');
+    // Remove old handlers and set new ones that READ inputs BEFORE cleanup
+    ok.onclick=null;
+    cancel.onclick=null;
+    ok.onclick=function(){
+      // READ inputs BEFORE closing modal - THIS WAS THE BUG
       var nsEl=document.getElementById('new-shift-input');
       var rsEl=document.getElementById('new-reason-input');
       var ns=nsEl?nsEl.value.trim():'';
       var rs=rsEl?rsEl.value.trim():'';
-      if(!ns){ toast('Enter new shift'); setTimeout(function(){ requestShiftCorrectionFromSchedule(idx, dateLabel, oldShift); },300); return; }
-      if(!rs){ toast('Enter reason'); setTimeout(function(){ requestShiftCorrectionFromSchedule(idx, dateLabel, oldShift); },300); return; }
+      if(!ns){
+        toast('Enter new shift');
+        if(nsEl) nsEl.focus();
+        return;
+      }
+      if(!rs){
+        toast('Enter reason');
+        if(rsEl) rsEl.focus();
+        return;
+      }
       var up=ns.toUpperCase();
       if(up==='UNAVAILABLE' || up==='U') ns='NA';
       else if(up==='ABSENT' || up==='A') ns='AB';
-      submitShiftCorrectionRequest(idx, shiftLabel, currentShift, ns, rs);
-    });
-    // Change button text after modal shows
+      // Now close modal and submit
+      modal.classList.remove('show');
+      ok.onclick=null;
+      cancel.onclick=null;
+      setTimeout(function(){
+        submitShiftCorrectionRequest(idx, shiftLabel, currentShift, ns, rs);
+      },100);
+    };
+    cancel.onclick=function(){
+      modal.classList.remove('show');
+      ok.onclick=null;
+      cancel.onclick=null;
+    };
     setTimeout(function(){
-      var confirmBtns=document.querySelectorAll('#custom-confirm-container button, .custom-modal button');
-      for(var i=0;i<confirmBtns.length;i++){
-        var btn=confirmBtns[i];
-        if(btn.textContent.toUpperCase().includes('CONFIRM') || btn.textContent.toUpperCase()==='OK'){
-          btn.textContent='SUBMIT REQUEST';
-          btn.style.background='#111';
-          btn.style.color='#fff';
-        }
-        if(btn.textContent.toUpperCase().includes('CANCEL')){
-          btn.textContent='CANCEL';
-        }
-      }
-      // Focus first input
       var input=document.getElementById('new-shift-input');
       if(input) input.focus();
-    },100);
-  }catch(e){ toast('Error: '+e.message); console.error(e); }
+    },150);
+  }catch(e){ toast('Error: '+e.message); console.error('requestShiftCorrection error', e); }
 }
+
+
 
 function submitShiftCorrectionRequest(idx, dateLabel, oldShift, newShift, reason){
   try{
     var username = safeGet('repco_username')||'';
+    if(!username){ toast('Not logged in'); return; }
     var cur = getSelectedFortnight(); if(!cur) cur=getCurrentFortnight();
     var shiftDate = dateLabel;
     var shiftISO = '';
     var fnsAll=safeGetJSON('retail_roster_byFortnight_v1',[]);
+    // Find exact date object for ISO
     for(var ff=0;ff<fnsAll.length;ff++){
       var fnn=fnsAll[ff];
       if(!fnn.dates) continue;
       for(var dd=0;dd<fnn.dates.length;dd++){
         var d=fnn.dates[dd];
-        if((d.date+' '+d.day)===dateLabel || d.date===dateLabel || d.iso===dateLabel){
+        if((d.date+' '+d.day)===dateLabel || d.date===dateLabel || d.day+' '+d.date===dateLabel){
           shiftDate=d.date+' '+d.day;
           shiftISO=d.iso||'';
           cur=fnn;
@@ -4067,6 +4123,7 @@ function submitShiftCorrectionRequest(idx, dateLabel, oldShift, newShift, reason
       shiftDate=cur.dates[idx].date+' '+cur.dates[idx].day;
       shiftISO=cur.dates[idx].iso||'';
     }
+    // Create request with all needed fields for matching
     var req = {
       id: 'req_'+Date.now()+'_'+Math.random().toString(36).substr(2,9),
       type: 'shift-correction',
@@ -4082,37 +4139,58 @@ function submitShiftCorrectionRequest(idx, dateLabel, oldShift, newShift, reason
       readByStaff: true,
       ts: Date.now(),
       dateLabel: dateLabel,
-      fortnightId: cur?cur.id:''
+      fortnightId: cur?cur.id:'',
+      dates: [shiftDate]
     };
     var reqs = safeGetJSON('retail_roster_requests_v2',[]);
     if(!Array.isArray(reqs)) reqs=[];
     reqs.push(req);
     safeSetJSON('retail_roster_requests_v2', reqs);
     try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
-    // Instant UI updates - both My Schedule and Requests page
-    toast('Request submitted for '+shiftDate+' - Colour changed to PENDING, check REQUESTS page');
-    try{ if(typeof updateRequestsBadge==='function') updateRequestsBadge(); }catch(e){}
-    try{ renderMySchedule(); }catch(e){}
-    try{ renderRequests(); }catch(e){}
-    // Cross-device sync - immediate cloud save for admin on desktop to see
+    // INSTANT UI UPDATES - THIS IS CRITICAL FOR COLOUR CHANGE
+    toast('Request submitted for '+shiftDate+' - Colour changed to PENDING');
+    try{ if(typeof updateRequestsBadge==='function') updateRequestsBadge(); }catch(e){ console.error(e); }
+    try{ renderMySchedule(); }catch(e){ console.error('renderMySchedule error', e); }
+    try{ renderRequests(); }catch(e){ console.error('renderRequests error', e); }
+    // Verify it was saved and show debug
     try{
-      if(typeof debouncedCloudSave==='function') debouncedCloudSave();
-      if(typeof cloudSave==='function') cloudSave();
-      // Also force immediate PUT to Firebase for instant cross-device
-      var state={};
-      if(typeof getAllState==='function') state=getAllState();
-      else {
-        state={retail_roster_requests_v2:JSON.stringify(reqs), _ts:Date.now()};
-      }
-      safeSet('repco_cloud_ts', String(state._ts||Date.now()));
-      if(typeof db!=='undefined' && db){
-        db.ref('repco_state').set(state).then(function(){ console.log('Cloud sync: request pushed for cross-device'); });
-      } else {
-        fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)}).then(function(){ console.log('Cloud sync via REST: request pushed'); });
-      }
-    }catch(e){ console.error('Cloud sync error', e); }
-  }catch(e){ toast('Failed to submit: '+e.message); console.error(e); }
+      var check=safeGetJSON('retail_roster_requests_v2',[]);
+      console.log('Request saved, total requests now:', check.length, 'Last:', check[check.length-1]);
+      if(check.length===0) throw new Error('Failed to save to localStorage');
+    }catch(e){ console.error('Save verification failed', e); toast('Warning: Request may not have saved'); }
+    // Cross-device sync for admin notification - with delay to ensure local save first
+    setTimeout(function(){
+      try{
+        if(typeof debouncedCloudSave==='function') debouncedCloudSave();
+        if(typeof cloudSave==='function') cloudSave();
+        var state=null;
+        if(typeof getAllState==='function') state=getAllState();
+        else {
+          state={retail_roster_requests_v2:JSON.stringify(reqs), _ts:Date.now()};
+        }
+        if(state){
+          safeSet('repco_cloud_ts', String(state._ts||Date.now()));
+          if(typeof db!=='undefined' && db && db.ref){
+            db.ref('repco_state').set(state).then(function(){ 
+              console.log('Cloud sync: request pushed for cross-device admin notification');
+              toast('Synced to cloud - admin will be notified');
+            }).catch(function(err){ console.error('Firebase push failed', err); });
+          } else if(typeof FIREBASE_DB_URL!=='undefined'){
+            fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)}).then(function(){ 
+              console.log('Cloud sync via REST: request pushed');
+              toast('Synced to cloud via REST');
+            }).catch(function(err){ console.error('REST push failed', err); });
+          }
+        }
+      }catch(e){ console.error('Cloud sync error', e); }
+    },500);
+  }catch(e){ 
+    toast('Failed to submit: '+e.message); 
+    console.error('submitShiftCorrectionRequest error', e);
+    console.error(e.stack);
+  }
 }
+
 
 </script>
 <div id="hidden-staff-page" class="full-page" style="display:none">
