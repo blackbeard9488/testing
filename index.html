@@ -580,7 +580,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022450000_FIX_LIVE_DENY_V49";
+const BUILD_ID="20261022460000_FIX_SYNTAX_V50";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -689,26 +689,22 @@ function applyCloudState(state,isInitial){
   var SESSION_BLOCK=['repco_username','repco_currentRole','repco_last_activity','repco_last_login_ts','repco_logout_minutes'];
   CLOUD_KEYS.forEach(function(k){
     if(SESSION_BLOCK.indexOf(k)!==-1) return;
-    if(k==='retail_roster_requests_v2') return; // Handle requests separately
+    if(k==='retail_roster_requests_v2') return;
     if(k==='retail_roster_public_holidays_v1'){
-      // FIXED: Merge public holidays with timestamp check - don't overwrite newer with older (Daniel bug + PH 0 staff bug)
       try{
         var cloudHolidays=null;
         try{ cloudHolidays=JSON.parse(state[k]); }catch(e){ cloudHolidays=null; }
         var localHolidays=safeGetJSON(k,[]);
         if(!Array.isArray(cloudHolidays)){
-          // Cloud not array, keep local if exists
           return;
         }
         if(!Array.isArray(localHolidays) || localHolidays.length===0){
-          // No local, use cloud
           try{localStorage.setItem(k,state[k]);}catch(e){}
           if(typeof MEMORY_STORE!=='undefined') MEMORY_STORE[k]=state[k];
           console.log('Public holidays: using cloud (no local)');
           return;
         }
-        // Merge by id with timestamp check
-                var mergedHolidays=localHolidays.slice();
+        var mergedHolidays=localHolidays.slice();
         var idToIdx={};
         for(var li=0;li<mergedHolidays.length;li++){ if(mergedHolidays[li] && mergedHolidays[li].id) idToIdx[mergedHolidays[li].id]=li; }
         var changedPH=false;
@@ -727,18 +723,14 @@ function applyCloudState(state,isInitial){
             var localTs=localPH.updatedTs||localPH.ts||0;
             var cloudStaff=(ch.staffAllocations||[]).length;
             var localStaff=(localPH.staffAllocations||[]).length;
-            // FIXED: If local has staff and cloud has 0, ALWAYS keep local if local is newer or equal (prevents 0 staff bug)
-            // Also handle undefined case - log shows local staff undefined
-            var localHasStaff=localStaff>0 || (localPH.staffAllocations && localPH.staffAllocations.length>0);
+            var localHasStaff=localStaff>0;
             var cloudHasNoStaff=cloudStaff===0;
             if(cloudHasNoStaff && localHasStaff){
-              // If local was updated within last 10 minutes, keep it
               if(Date.now()-localTs < 10*60*1000 || localTs>=cloudTs){
-                console.log('Public holidays: KEEPING LOCAL (has staff)', ch.id, 'local', localStaff, 'cloud 0 staff, local newer');
-                continue; // Keep local, don't overwrite
+                console.log('Public holidays: KEEPING LOCAL (has staff)', ch.id, 'local', localStaff, 'cloud 0 staff');
+                continue;
               }
             }
-            // Keep newest by timestamp
             if(cloudTs>localTs){
               mergedHolidays[existingIdx]=ch;
               changedPH=true;
@@ -748,17 +740,13 @@ function applyCloudState(state,isInitial){
             }
           }
         }
-        // Handle deletions
         if(changedPH){
           var jsonStr=JSON.stringify(mergedHolidays);
           try{localStorage.setItem(k,jsonStr);}catch(e){}
           if(typeof MEMORY_STORE!=='undefined') MEMORY_STORE[k]=jsonStr;
           console.log('Public holidays merged, final count:', mergedHolidays.length);
         } else {
-          // Even if not changed, ensure local is saved if it has staff and cloud has 0 (prevent overwrite)
           console.log('Public holidays: No change needed, keeping local');
-        }
-        console.log('Public holidays merged, final count:', mergedHolidays.length);
         }
       }catch(e){ console.error('Public holidays merge error', e); }
       return;
@@ -768,7 +756,7 @@ function applyCloudState(state,isInitial){
       if(typeof MEMORY_STORE!=='undefined') MEMORY_STORE[k]=state[k];
     }
   });
-  // Merge requests for cross-device: FIXED to prevent old requests coming back on refresh
+  // Merge requests - DANIEL FIX: denied always wins over pending
   if(state['retail_roster_requests_v2']!==undefined){
     try{
       var cloudReqs=null;
@@ -779,8 +767,6 @@ function applyCloudState(state,isInitial){
         var idToIndex={};
         for(var li=0;li<merged.length;li++){ if(merged[li] && merged[li].id) idToIndex[merged[li].id]=li; }
         var changed=false;
-        
-        // First, update existing requests with newest status based on timestamp
         for(var i=0;i<cloudReqs.length;i++){
           var cr=cloudReqs[i];
           if(!cr || !cr.id) continue;
@@ -791,102 +777,59 @@ function applyCloudState(state,isInitial){
             changed=true;
           } else {
             var local=merged[existingIdx];
-            //             // Determine which is newer - compare deniedTs, approvedTs, ts
             var cloudTime=cr.deniedTs||cr.approvedTs||cr.ts||0;
             var localTime=local.deniedTs||local.approvedTs||local.ts||0;
-            // DANIEL FIX: Denied/approved ALWAYS wins over pending, regardless of timestamp
-            // If one is actioned and other is pending, actioned wins
             var keepCloud=false;
             var keepLocal=false;
-            
             var localActioned=(local.status==='denied' || local.status==='rejected' || local.status==='approved');
             var cloudActioned=(cr.status==='denied' || cr.status==='rejected' || cr.status==='approved');
-            
             if(localActioned && !cloudActioned){
-              // Local denied/approved, cloud pending - keep local (admin actioned on this device)
               keepLocal=true;
               console.log('Requests merge: KEEP LOCAL actioned', local.id, local.status, 'vs cloud pending');
             } else if(!localActioned && cloudActioned){
-              // Cloud denied/approved, local pending - keep cloud (admin actioned on other device) - DANIEL FIX
               keepCloud=true;
               console.log('Requests merge: KEEP CLOUD actioned', cr.id, cr.status, 'vs local pending - DANIEL WILL SEE DENIED');
             } else if(localActioned && cloudActioned){
-              // Both actioned, keep newest by timestamp, but denied has priority over approved if same time
-              if(cloudTime>localTime){
-                keepCloud=true;
-                console.log('Requests merge: Both actioned, cloud newer', cr.id);
-              } else {
-                keepLocal=true;
-                console.log('Requests merge: Both actioned, local newer', local.id);
-              }
+              if(cloudTime>localTime) keepCloud=true;
+              else keepLocal=true;
             } else {
-              // Both pending, keep newest
-              if(cloudTime>localTime){
-                keepCloud=true;
-                console.log('Requests merge: Both pending, cloud newer');
-              } else {
-                keepLocal=true;
-              }
+              if(cloudTime>localTime) keepCloud=true;
+              else keepLocal=true;
             }
-            
             if(keepCloud){
               if(JSON.stringify(local)!==JSON.stringify(cr)){
                 merged[existingIdx]=cr;
                 changed=true;
                 console.log('Updated request from cloud (newer):', cr.id, 'status', local.status, '->', cr.status);
               }
-            } else if(keepLocal){
-              // Keep local, do nothing, but ensure cloud will be updated later
-              console.log('Keeping local request (newer actioned):', local.id, 'status', local.status, 'vs cloud', cr.status);
             }
           }
         }
-        
-        // Handle deletions: if cloud has fewer and is newer, remove deleted requests
-        // Check for deleted markers
         var cloudIds={};
         for(var ci=0;ci<cloudReqs.length;ci++){ if(cloudReqs[ci] && cloudReqs[ci].id) cloudIds[cloudReqs[ci].id]=true; }
-        
-        // If local has requests that are not in cloud, check if they were deleted (timestamp based)
-        // If cloud timestamp is newer than local's last update, and cloud doesn't have the request, it was deleted on another device
         var cloudTs=state._ts||0;
         var localUpdateTs=parseInt(safeGet('repco_cloud_ts')||'0');
         var requestsUpdateTs=parseInt(safeGet('retail_roster_requests_update_ts')||'0');
-        
-        // If employee deleted a request, cloud will have fewer, and we should respect deletion
-        // Only re-add if cloud is older than local deletion
         var toRemove=[];
         for(var li=0;li<merged.length;li++){
           var lr=merged[li];
           if(!lr || !lr.id) continue;
           if(!cloudIds[lr.id]){
-            // Request exists locally but not in cloud - was it deleted in cloud?
-            // Check if we have a deletion marker or if cloud is newer
             var deletedMarker=null;
             try{ deletedMarker=localStorage.getItem('retail_roster_deleted_'+lr.id); }catch(e){}
             if(deletedMarker){
-              // We deleted it locally, keep it deleted
               toRemove.push(li);
             } else if(cloudTs>requestsUpdateTs && cloudTs>localUpdateTs){
-              // Cloud is newer and doesn't have this request - it was deleted on another device (employee cancelled)
-              // Remove it locally too for admin sync
               toRemove.push(li);
               changed=true;
               console.log('Removing deleted request (synced from employee):', lr.id);
             }
           }
         }
-        
-        // Remove marked deletions in reverse order
         toRemove.sort(function(a,b){ return b-a; });
         for(var ri=0;ri<toRemove.length;ri++){
           merged.splice(toRemove[ri],1);
         }
-               // FORCE SEE ANY STATUS: Do NOT delete pending when denied exists - keep all statuses visible
-        // Only deduplicate by ID, keep all statuses
-        // Remove duplicates and ensure we keep actioned versions
-        
-        // DANIEL FIX: If cloud has denied/approved and local has pending for same date, keep cloud (denied/approved)
         function extractDateKeyMerge(str){
           if(!str) return '';
           var m=str.match(/(\d{1,2}\/\d{1,2})/);
@@ -898,7 +841,6 @@ function applyCloudState(state,isInitial){
           }
           return '';
         }
-        // Build map of denied/approved dates from cloud
         var cloudDeniedDates={};
         for(var cd=0;cd<merged.length;cd++){
           var cr=merged[cd];
@@ -908,7 +850,6 @@ function applyCloudState(state,isInitial){
             if(ck) cloudDeniedDates[(cr.username||'').toLowerCase()+'|'+ck]=true;
           }
         }
-        // Filter out local pending if cloud has denied/approved for same date
         var filteredForPriority=[];
         for(var fp=0;fp<merged.length;fp++){
           var fr=merged[fp];
@@ -924,9 +865,6 @@ function applyCloudState(state,isInitial){
           filteredForPriority.push(fr);
         }
         merged=filteredForPriority;
-        
-        var finalMerged=[];
-        var seen={};
         var finalMerged=[];
         var seen={};
         for(var m=0;m<merged.length;m++){
@@ -936,7 +874,6 @@ function applyCloudState(state,isInitial){
             seen[r.id]=true;
             finalMerged.push(r);
           } else {
-            // Duplicate id, keep the one with actioned status
             var existingIdx2=-1;
             for(var f=0;f<finalMerged.length;f++){ if(finalMerged[f].id===r.id){ existingIdx2=f; break; } }
             if(existingIdx2!==-1){
@@ -948,23 +885,13 @@ function applyCloudState(state,isInitial){
             }
           }
         }
-        
         if(changed || finalMerged.length!==localReqs.length || cloudReqs.length!==localReqs.length || toRemove.length>0){
           safeSetJSON('retail_roster_requests_v2', finalMerged);
           try{localStorage.setItem('retail_roster_requests_update_ts', String(Date.now()));}catch(e){}
           console.log('Requests merged - synced deletions, prevented old requests coming back, final count:', finalMerged.length);
-          try{
-            var currentState=getAllState();
-            if(currentState && typeof db!=='undefined' && db && db.ref){
-              safeSet('repco_cloud_ts', String(Date.now()-1000));
-            }
-          }catch(e){}
         }
       }
     }catch(e){ console.log('merge error', e); }
-  } else {
-    // If no requests in cloud state, keep local requests
-    console.log('No requests in cloud state, keeping local');
   }
   suppressCloudSave=false; 
   if(isInitial){
@@ -979,17 +906,6 @@ function applyCloudState(state,isInitial){
       } else {
         var el=document.getElementById('maintenance-main-v141');
         if(el && el.classList.contains('show')){ el.classList.remove('show'); document.body.classList.remove('maintenance-active'); toast('Maintenance disabled'); setTimeout(function(){ try{populateFortnightSelect();renderRosterSafe();}catch(e){} },200); }
-      }
-    }catch(e){}
-    try{
-      var reqs=safeGetJSON('retail_roster_requests_v2',[]);
-      var pending=reqs.filter(function(r){ return r && r.status==='pending' && !r.readByAdmin; });
-      if(pending.length>0 && isManagerRole(getActualRole())){
-        updateRequestsBadge();
-        var btn=document.getElementById('btn-requests');
-        if(btn){ btn.style.background='#FFFBCC'; btn.style.border='3px solid #E30613'; }
-        toast('NEW REQUEST from '+pending[0].username+' - '+pending[0].shiftDate);
-        try{ document.title='('+pending.length+') REPCO ROSTER - NEW REQUEST'; }catch(e){}
       }
     }catch(e){}
   }
