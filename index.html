@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_APPROVE_V113";
+const BUILD_ID="20261022690000_FIX_RESUBMIT_V114";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -908,13 +908,23 @@ function applyCloudState(state,isInitial){
           }
           return '';
         }
+        // FIX V114: Track final requests by date with timestamp to allow resubmit after denied
         var cloudDeniedDates={};
+        var cloudDeniedTsByDate={};
         for(var cd=0;cd<merged.length;cd++){
           var cr=merged[cd];
           if(!cr) continue;
           if(cr.status==='denied'||cr.status==='rejected'||cr.status==='approved'){
             var ck=extractDateKeyMerge(cr.shiftDate||'')||extractDateKeyMerge(cr.shiftISO||'');
-            if(ck) cloudDeniedDates[(cr.username||'').toLowerCase()+'|'+ck]=true;
+            if(ck){
+              var key=(cr.username||'').toLowerCase()+'|'+ck;
+              var ts=cr.deniedTs||cr.approvedTs||cr.ts||0;
+              cloudDeniedDates[key]=true;
+              // Keep newest final timestamp per date
+              if(!cloudDeniedTsByDate[key] || ts>cloudDeniedTsByDate[key]){
+                cloudDeniedTsByDate[key]=ts;
+              }
+            }
           }
         }
         var filteredForPriority=[];
@@ -923,10 +933,18 @@ function applyCloudState(state,isInitial){
           if(!fr) continue;
           if(fr.status==='pending'){
             var pk=extractDateKeyMerge(fr.shiftDate||'')||extractDateKeyMerge(fr.shiftISO||'');
-            if(pk && cloudDeniedDates[(fr.username||'').toLowerCase()+'|'+pk]){
-              console.log('DANIEL FIX: Cloud has denied/approved for date', pk, 'removing local pending', fr.id);
-              changed=true;
-              continue;
+            var pkey=(fr.username||'').toLowerCase()+'|'+pk;
+            if(pk && cloudDeniedDates[pkey]){
+              // Only remove pending if it's OLDER than the final (approved/denied) - allow resubmit if pending is newer
+              var pendingTs=fr.ts||0;
+              var finalTs=cloudDeniedTsByDate[pkey]||0;
+              if(pendingTs<=finalTs){
+                console.log('DANIEL FIX: Cloud has newer denied/approved for date', pk, 'removing old pending', fr.id, 'pendingTs', pendingTs, 'finalTs', finalTs);
+                changed=true;
+                continue;
+              } else {
+                console.log('ALLOW RESUBMIT: New pending', fr.id, 'is newer than denied for', pk, 'pendingTs', pendingTs, 'finalTs', finalTs, '- keeping');
+              }
             }
           }
           filteredForPriority.push(fr);
@@ -4901,13 +4919,42 @@ function renderMySchedule(){
         }
       }
       if(matches.length>0){
-        // CRITICAL FIX V113: Approved/denied ALWAYS wins over pending for same date
+        // CRITICAL FIX V114: Handle resubmit after denied - allow newer pending to show over older denied
         var approvedMatches=matches.filter(function(m){ return m.status==='approved'; });
         var deniedMatches=matches.filter(function(m){ return m.status==='denied'||m.status==='rejected'; });
         var pendingMatches=matches.filter(function(m){ return m.status==='pending'; });
+        
+        // Approved ALWAYS wins - if approved exists, show approved (roster already changed)
         if(approvedMatches.length>0){
           approvedMatches.sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
+          // But if there's a pending resubmit newer than approved, that means user resubmitted after approval? 
+          // For shift-correction, approved changes roster to OFF, so new pending for same date should still show as pending (user wants to change again)
+          // Check: if newest pending is newer than newest approved, show pending resubmit
+          if(pendingMatches.length>0){
+            pendingMatches.sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
+            var newestPending=pendingMatches[0];
+            var newestApproved=approvedMatches[0];
+            if((newestPending.ts||0) > (newestApproved.approvedTs||newestApproved.ts||0)){
+              console.log('Resubmit after approved: showing newer pending', newestPending.req.id);
+              return newestPending;
+            }
+          }
           return approvedMatches[0];
+        }
+        // For denied vs pending resubmit: if pending is newer than denied, show pending (user resubmitted)
+        if(pendingMatches.length>0 && deniedMatches.length>0){
+          pendingMatches.sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
+          deniedMatches.sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
+          var newestPending=pendingMatches[0];
+          var newestDenied=deniedMatches[0];
+          var pendingTs=newestPending.ts||0;
+          var deniedTs=newestDenied.deniedTs||newestDenied.ts||0;
+          if(pendingTs>deniedTs){
+            console.log('Resubmit after denied: showing newer pending', newestPending.req.id, 'over denied', newestDenied.req.id);
+            return newestPending;
+          } else {
+            return newestDenied;
+          }
         }
         if(deniedMatches.length>0){
           deniedMatches.sort(function(a,b){ return (b.ts||0)-(a.ts||0); });
