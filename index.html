@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_ALL_USERS_V100";
+const BUILD_ID="20261022690000_FIX_PH_CUSTOM_V102";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -2281,11 +2281,9 @@ function renderOptions(){
   if(isMgr){
     inner.innerHTML='<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px">'
       +'<button class="card" style="font-weight:900;text-align:left" onclick="openPage(\'today-workers-page\')">VIEW TODAY\'S WORKERS</button>'
-      +'<button class="card" style="font-weight:900;text-align:left" onclick="openPage(\'account-page\')">EDIT USERNAME / PASSWORD</button>'
       +'<button class="card" style="font-weight:900;text-align:left" onclick="openPage(\'account-mgmt-page\')">ACCOUNT MANAGEMENT - ALL USERS</button>'
       +'<button class="card" style="font-weight:900;text-align:left" onclick="openPage(\'archive-page\')">ARCHIVE - ROSTERS</button>'
       +'<button class="card" style="font-weight:900;text-align:left;background:#8FC6F5" id="btn-import" onclick="triggerImport()">IMPORT ROSTER</button>'
-      +'<button class="card" style="font-weight:900;text-align:left" onclick="openPage(\'import-export-page\')">EXPORT / IMPORT - EXCEL</button>'
       +'<button class="card" style="font-weight:900;text-align:left" onclick="openPage(\'requests-page\')">ALL REQUESTS / APPROVALS</button>'
       +'<button class="card" style="font-weight:900;text-align:left" onclick="showMain()">BACK TO ROSTER</button>'
       +'</div>'+timerHtml+maintenanceHtml;
@@ -2949,10 +2947,16 @@ function openCreatePublicHolidayModal(editId){
       }
     }
     var allStaff=Object.values(allStaffMap).sort(function(a,b){ return (a.lastName||'').localeCompare(b.lastName||''); });
-    var staffOptions=allStaff.map(function(st){ return '<option value="'+(st.username||'')+'" data-first="'+(st.firstName||'')+'" data-last="'+(st.lastName||'')+'">'+(st.lastName||'')+', '+(st.firstName||'')+' ('+(st.username||'')+')</option>'; }).join('');
-    var areas=['Counter','Workshop','Office','Delivery','Stock','Front','Back','Other'];
-    var areaOptions=areas.map(function(a){ return '<option value="'+a+'">'+a+'</option>'; }).join('');
-    var modalHtml='<div style="font-size:11px"><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label style="font-weight:900;font-size:9px">DATE (ISO e.g. 2026-01-26)</label><input id="ph-date-iso" type="date" value="'+(editing?editing.dateISO:'')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111"></div><div><label style="font-weight:900;font-size:9px">PUBLIC HOLIDAY NAME</label><input id="ph-name" placeholder="e.g. Australia Day" value="'+(editing?editing.name:'')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111"></div></div><div style="margin-top:12px"><label style="font-weight:900;font-size:11px">ALLOCATE STAFF FOR THIS PUBLIC HOLIDAY</label><div style="margin-top:8px;display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:6px;align-items:end"><div><label style="font-size:9px">Staff</label><select id="ph-staff-select" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px"><option value="">Select staff</option>'+staffOptions+'</select></div><div><label style="font-size:9px">Times e.g. 08:00-16:00</label><input id="ph-shift" placeholder="08:00-16:30" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px"></div><div><label style="font-size:9px">Area</label><select id="ph-area" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px"><option value="">Area</option>'+areaOptions+'</select></div><div><button onclick="addPublicHolidayStaffRow()" style="background:#111;color:#fff;border-radius:9999px;padding:6px 10px;font-weight:900;font-size:10px">ADD</button></div></div><div id="ph-staff-list" style="margin-top:10px;max-height:200px;overflow:auto"></div></div><div style="margin-top:8px;font-size:9px;color:#666">Staff NOT listed will automatically be OFF on this date. Original shifts saved and restored if holiday deleted.</div></div>';
+    // Fix: use fallback key if username empty (for Daniel Duffield etc with empty username field)
+    var staffOptions=allStaff.map(function(st){ 
+      var key=(st.username||'').trim()||(st.firstName+'_'+st.lastName)||((st.firstName||'')+' '+(st.lastName||'')).trim()||'';
+      if(!key) return '';
+      var display=(st.lastName||'')+', '+(st.firstName||'')+' ('+(st.username||key)+')';
+      return '<option value="'+key+'" data-username="'+(st.username||key)+'" data-first="'+(st.firstName||'')+'" data-last="'+(st.lastName||'')+'">'+display+'</option>'; 
+    }).filter(Boolean).join('');
+    // Custom area field requested - free text, not dropdown
+    var areaPlaceholder='e.g. Front, Counter, Workshop, Custom';
+    var modalHtml='<div style="font-size:11px"><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label style="font-weight:900;font-size:9px">DATE (ISO e.g. 2026-01-26)</label><input id="ph-date-iso" type="date" value="'+(editing?editing.dateISO:'')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111"></div><div><label style="font-weight:900;font-size:9px">PUBLIC HOLIDAY NAME</label><input id="ph-name" placeholder="e.g. Australia Day" value="'+(editing?editing.name:'')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111"></div></div><div style="margin-top:12px"><label style="font-weight:900;font-size:11px">ALLOCATE STAFF FOR THIS PUBLIC HOLIDAY</label><div style="margin-top:8px;display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:6px;align-items:end"><div><label style="font-size:9px">Staff</label><select id="ph-staff-select" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px"><option value="">Select staff</option>'+staffOptions+'</select></div><div><label style="font-size:9px">Times e.g. 08:00-16:00</label><input id="ph-shift" placeholder="08:00-16:30" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px"></div><div><label style="font-size:9px">Area (custom)</label><input id="ph-area" placeholder="Front, Counter, custom..." style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px"></div><div><button onclick="addPublicHolidayStaffRow()" style="background:#111;color:#fff;border-radius:9999px;padding:6px 10px;font-weight:900;font-size:10px">ADD</button></div></div><div id="ph-staff-list" style="margin-top:10px;max-height:200px;overflow:auto"></div></div><div style="margin-top:8px;font-size:9px;color:#666">Staff NOT listed will automatically be OFF on this date. Original shifts saved and restored if holiday deleted.</div></div>';
     showCustomConfirm(editing?'Edit Public Holiday: '+(editing.name||editing.dateISO):'Create Public Holiday', modalHtml, function(confirmed){
       if(!confirmed) return;
       var dateIso=document.getElementById('ph-date-iso')?.value||'';
@@ -3022,23 +3026,42 @@ function addPublicHolidayStaffRow(){
     var sel=document.getElementById('ph-staff-select');
     var shift=document.getElementById('ph-shift');
     var area=document.getElementById('ph-area');
-    if(!sel || !sel.value){ toast('Select staff'); return; }
+    if(!sel){ toast('Select staff - no select found'); return; }
+    var rawVal=(sel.value||'').trim();
+    if(!rawVal){ 
+      // Try get selected option value even if empty
+      var optEmpty=sel.options[sel.selectedIndex];
+      if(optEmpty){
+        rawVal=(optEmpty.getAttribute('data-username')||optEmpty.value||'').trim();
+      }
+    }
+    if(!rawVal){ toast('Select staff'); return; }
     var opt=sel.options[sel.selectedIndex];
+    if(!opt){ toast('Select staff'); return; }
     var first=opt.getAttribute('data-first')||'';
     var last=opt.getAttribute('data-last')||'';
-    var username=sel.value||'';
+    var username=opt.getAttribute('data-username')||rawVal||'';
     var shiftVal=(shift?.value||'').trim()||'08:00-16:30';
     var areaVal=(area?.value||'').trim()||'';
-    // Check duplicate
-    if(tempPublicHolidayStaff.find(function(sa){ return sa.username && username && sa.username.toLowerCase()===username.toLowerCase(); })){
+    // Check duplicate by username or by first+last
+    if(tempPublicHolidayStaff.find(function(sa){ 
+      var saUser=(sa.username||'').toLowerCase();
+      var checkUser=(username||'').toLowerCase();
+      if(saUser && checkUser && saUser===checkUser) return true;
+      if(sa.firstName && sa.lastName && first && last){
+        if(sa.firstName.toLowerCase()===first.toLowerCase() && sa.lastName.toLowerCase()===last.toLowerCase()) return true;
+      }
+      return false;
+    })){
       toast('Staff already added'); return;
     }
-    tempPublicHolidayStaff.push({firstName:first,lastName:last,username:username,shift:shiftVal,area:areaVal});
+    tempPublicHolidayStaff.push({firstName:first,lastName:last,username:username,shift:shiftVal,area:areaVal,key:rawVal});
     renderTempPublicHolidayStaffList();
     if(sel) sel.value='';
     if(shift) shift.value='';
     if(area) area.value='';
-  }catch(e){ toast('Error: '+e.message); }
+    toast('Added: '+last+', '+first+' - '+shiftVal+' '+(areaVal?'['+areaVal+']':''));
+  }catch(e){ toast('Error: '+e.message); console.error(e); }
 }
 
 function removeTempPublicHolidayStaff(idx){
@@ -3430,183 +3453,97 @@ function deleteHiddenStaff(idx){
 }
 
 
-function editHiddenStaff(name){
-  let hidden=safeGetJSON('retail_roster_hidden_v1',[]);
-  let shiftsStore=safeGetJSON('retail_roster_hidden_shifts_v1',{});
-  let users=safeGetJSON('retail_roster_users_v1',[]);
-  let cur=getCurrentFortnight();
-  let shifts=shiftsStore[name]||Array(14).fill('OFF');
-  let user=users.find(u=>(u.firstName+' '+u.lastName).toLowerCase()===name.toLowerCase());
-  let firstName='', lastName='';
-  if(name.includes(' ')){
-    let parts=name.split(' ');
-    firstName=parts[0];
-    lastName=parts.slice(1).join(' ');
-  } else {
-    firstName=name;
-  }
-  if(user){
-    firstName=user.firstName||firstName;
-    lastName=user.lastName||lastName;
-  }
-  // Create modal
-  let modal=document.getElementById('hidden-edit-modal');
-  if(!modal){
-    modal=document.createElement('div');
-    modal.id='hidden-edit-modal';
-    modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:999999;display:flex;align-items:center;justify-content:center;padding:20px;overflow-y:auto';
-    document.body.appendChild(modal);
-  }
-  let datesHtml='';
-  if(cur && cur.dates){
-    cur.dates.forEach((d,i)=>{
-      let sh=shifts[i]||'OFF';
-      datesHtml+='<div style="display:grid;grid-template-columns:90px 1fr 50px 50px 50px;gap:6px;align-items:center;margin-bottom:6px"><label style="font-size:10px;font-weight:900">'+d.day+' '+d.date+'</label><input id="edit-hs-shift-'+i+'" value="'+sh+'" style="padding:6px;border-radius:9999px;border:2px solid #111;font-size:11px"><button onclick="document.getElementById(\'edit-hs-shift-'+i+'\').value=\'OFF\'" style="background:#E9E9E9;border:2px solid #111;border-radius:9999px;padding:4px 6px;font-size:9px;font-weight:900">OFF</button><button onclick="document.getElementById(\'edit-hs-shift-'+i+'\').value=\'NA\'" style="background:#111;color:#fff;border:none;border-radius:9999px;padding:4px 6px;font-size:9px;font-weight:900">NA</button><button onclick="document.getElementById(\'edit-hs-shift-'+i+'\').value=\'AB\'" style="background:#E30613;color:#fff;border:none;border-radius:9999px;padding:4px 6px;font-size:9px;font-weight:900">AB</button></div>';
-    });
-  }
-  modal.innerHTML='<div style="background:#fff;border:3px solid #111;border-radius:16px;padding:20px;max-width:600px;width:100%;max-height:90vh;overflow-y:auto;box-shadow:6px 6px 0 #111"><div style="font-weight:900;font-size:16px;margin-bottom:12px">EDIT HIDDEN STAFF: '+name+'</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label style="font-size:10px;font-weight:900">First Name</label><input id="edit-hs-first" value="'+firstName+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;font-size:11px"></div><div><label style="font-size:10px;font-weight:900">Last Name</label><input id="edit-hs-last" value="'+lastName+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;font-size:11px"></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px"><div><label style="font-size:10px;font-weight:900">Employment Type</label><select id="edit-hs-type" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;font-size:11px"><option value="casual" '+(user && user.employmentType==='casual'?'selected':'')+'>Casual</option><option value="fulltime" '+(user && user.employmentType==='fulltime'?'selected':'')+'>Full Time</option></select></div><div><label style="font-size:10px;font-weight:900">Role</label><select id="edit-hs-role" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;font-size:11px"><option value="staff" '+(user && user.role==='staff'?'selected':'')+'>Staff</option><option value="manager" '+(user && user.role==='manager'?'selected':'')+'>Manager</option></select></div></div><div style="margin-top:10px"><div style="font-weight:900;font-size:11px;background:#111;color:#fff;border-radius:9999px;padding:6px 12px;display:inline-block">Login Details</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px"><div><label style="font-size:10px;font-weight:900">Username</label><input id="edit-hs-user" value="'+(user?user.username:'')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;font-size:11px"></div><div><label style="font-size:10px;font-weight:900">Password (blank = keep)</label><input id="edit-hs-pass" placeholder="Leave blank to keep current" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;font-size:11px"></div></div></div><div style="margin-top:14px"><div style="font-weight:900;font-size:11px">Shifts (14 days) - Days they are ON:</div><div style="margin-top:8px;max-height:300px;overflow-y:auto;border:2px dashed #111;border-radius:12px;padding:10px;background:#F9F9F9">'+datesHtml+'</div></div><div style="display:flex;gap:10px;margin-top:16px"><button onclick="saveHiddenStaffEdit(\''+name.replace(/'/g, "\\'")+'\')" style="flex:1;background:#111;color:#fff;border:none;border-radius:9999px;padding:12px;font-weight:900;font-size:12px;cursor:pointer">SAVE CHANGES</button><button onclick="document.getElementById(\'hidden-edit-modal\').remove()" style="flex:1;background:#fff;color:#111;border:2px solid #111;border-radius:9999px;padding:12px;font-weight:900;font-size:12px;cursor:pointer">CANCEL</button></div></div>';
-  modal.style.display='flex';
+
+function editHiddenStaff(idx){
+  try{
+    var hidden=safeGetJSON('retail_roster_hidden_staff_v1',[]);
+    var h=hidden[idx];
+    if(!h){ toast('Not found'); return; }
+    var modal=document.getElementById('hidden-edit-modal');
+    if(!modal){
+      modal=document.createElement('div');
+      modal.id='hidden-edit-modal';
+      modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:999999;display:flex;align-items:center;justify-content:center;padding:20px;overflow-y:auto';
+      document.body.appendChild(modal);
+    }
+    var cur=null;
+    try{ cur=getCurrentFortnight(); }catch(e){}
+    var datesHtml='';
+    if(cur && cur.dates){
+      cur.dates.forEach(function(d,i){
+        var sh=(h.shifts&&h.shifts[i])||'OFF';
+        datesHtml+='<div style="display:grid;grid-template-columns:90px 1fr 50px 50px 50px;gap:6px;align-items:center;margin-bottom:6px"><label style="font-size:10px;font-weight:900">'+d.day+' '+d.date+'</label><input id="edit-hs-shift-'+i+'" value="'+sh+'" style="padding:6px;border-radius:9999px;border:2px solid #111;font-size:11px"><button onclick="document.getElementById(\'edit-hs-shift-'+i+'\').value=\'OFF\'" style="background:#E9E9E9;border:2px solid #111;border-radius:9999px;padding:4px 6px;font-size:9px;font-weight:900">OFF</button><button onclick="document.getElementById(\'edit-hs-shift-'+i+'\').value=\'NA\'" style="background:#111;color:#fff;border:none;border-radius:9999px;padding:4px 6px;font-size:9px;font-weight:900">NA</button><button onclick="document.getElementById(\'edit-hs-shift-'+i+'\').value=\'AB\'" style="background:#E30613;color:#fff;border:none;border-radius:9999px;padding:4px 6px;font-size:9px;font-weight:900">AB</button></div>';
+      });
+    }
+    modal.innerHTML='<div style="background:#fff;border:3px solid #111;border-radius:16px;padding:20px;max-width:600px;width:100%;max-height:90vh;overflow-y:auto;box-shadow:6px 6px 0 #111"><div style="font-weight:900;font-size:16px;margin-bottom:12px">EDIT HIDDEN STAFF: '+h.firstName+' '+h.lastName+'</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label style="font-size:10px;font-weight:900">First Name</label><input id="edit-hs-first" value="'+h.firstName+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;font-size:11px"></div><div><label style="font-size:10px;font-weight:900">Last Name</label><input id="edit-hs-last" value="'+h.lastName+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;font-size:11px"></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px"><div><label style="font-size:10px;font-weight:900">Username</label><input id="edit-hs-user" value="'+h.username+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;font-size:11px"></div><div><label style="font-size:10px;font-weight:900">Password</label><input id="edit-hs-pass" value="'+(h.password||'')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;font-size:11px"></div></div><div style="margin-top:10px">'+datesHtml+'</div><div style="display:flex;gap:8px;margin-top:16px"><button onclick="saveHiddenStaffEdit('+idx+')" style="background:#111;color:#fff;border-radius:9999px;padding:10px 16px;font-weight:900;flex:1">SAVE</button><button onclick="document.getElementById(\'hidden-edit-modal\').remove()" style="background:#E9E9E9;border:2px solid #111;border-radius:9999px;padding:10px 16px;font-weight:900;flex:1">CANCEL</button></div></div>';
+    modal.style.display='flex';
+  }catch(e){ console.error(e); toast('Error: '+e.message); }
 }
 
-function saveHiddenStaffEdit(oldName){
-  let first=document.getElementById('edit-hs-first').value.trim();
-  let last=document.getElementById('edit-hs-last').value.trim();
-  let type=document.getElementById('edit-hs-type').value;
-  let role=document.getElementById('edit-hs-role').value;
-  let username=document.getElementById('edit-hs-user').value.trim();
-  let password=document.getElementById('edit-hs-pass').value;
-  if(!first || !last){ toast('First and Last name required'); return; }
-  let newName=first+' '+last;
-  let cur=getCurrentFortnight();
-  let newShifts=[];
-  if(cur && cur.dates){
-    cur.dates.forEach((d,i)=>{
-      let inp=document.getElementById('edit-hs-shift-'+i);
-      newShifts.push(inp?inp.value.trim()||'OFF':'OFF');
-    });
-  }
-  // Update hidden lists
-  let hidden=safeGetJSON('retail_roster_hidden_v1',[]);
-  let shiftsStore=safeGetJSON('retail_roster_hidden_shifts_v1',{});
-  let users=safeGetJSON('retail_roster_users_v1',[]);
-  // Update hidden name list
-  let idx=hidden.findIndex(n=>n.toLowerCase()===oldName.toLowerCase());
-  if(idx!==-1) hidden[idx]=newName;
-  shiftsStore[newName]=newShifts;
-  if(oldName!==newName) delete shiftsStore[oldName];
-  // Update users
-  let user=users.find(u=>(u.firstName+' '+u.lastName).toLowerCase()===oldName.toLowerCase());
-  if(user){
-    user.firstName=first;
-    user.lastName=last;
-    user.employmentType=type;
-    user.role=role;
-    if(username) user.username=username;
-    if(password) user.password=password;
-  }
-  // Update all fortnights
-  let fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
-  fns.forEach(fn=>{
-    if(!fn.staff) return;
-    let s=fn.staff.find(st=> (st.firstName+' '+st.lastName).toLowerCase()===oldName.toLowerCase());
-    if(s){
-      s.firstName=first;
-      s.lastName=last;
-      s.employmentType=type;
-      s.role=role;
-      s.shifts=newShifts.slice();
+function saveHiddenStaffEdit(idx){
+  try{
+    var first=(document.getElementById('edit-hs-first')?.value||'').trim();
+    var last=(document.getElementById('edit-hs-last')?.value||'').trim();
+    var user=(document.getElementById('edit-hs-user')?.value||'').trim();
+    var pass=(document.getElementById('edit-hs-pass')?.value||'').trim();
+    if(!first || !last || !user){ toast('First, Last, Username required'); return; }
+    var hidden=safeGetJSON('retail_roster_hidden_staff_v1',[]);
+    var h=hidden[idx];
+    if(!h) return;
+    var oldUser=h.username;
+    var cur=null;
+    try{ cur=getCurrentFortnight(); }catch(e){}
+    var newShifts=[];
+    if(cur && cur.dates){
+      cur.dates.forEach(function(d,i){
+        var inp=document.getElementById('edit-hs-shift-'+i);
+        newShifts.push(inp?inp.value.trim()||'OFF':'OFF');
+      });
+    } else {
+      newShifts=h.shifts||Array(14).fill('OFF');
     }
-  });
-  safeSetJSON('retail_roster_hidden_v1',hidden);
-  safeSetJSON('retail_roster_hidden_shifts_v1',shiftsStore);
-  safeSetJSON('retail_roster_users_v1',users);
-  safeSetJSON('retail_roster_byFortnight_v1',fns);
-  document.getElementById('hidden-edit-modal').remove();
-  toast('Updated hidden staff: '+newName);
-  renderHiddenStaffPage();
-  renderRosterSafe();
-  try{ debouncedCloudSave(); }catch(e){}
+    h.firstName=first; h.lastName=last; h.username=user; h.password=pass; h.shifts=newShifts;
+    safeSetJSON('retail_roster_hidden_staff_v1', hidden);
+    // Update users
+    var users=safeGetJSON('retail_roster_users_v1',[]);
+    var uIdx=users.findIndex(function(u){ return u.username && u.username.toLowerCase()===oldUser.toLowerCase(); });
+    if(uIdx>=0){
+      users[uIdx].firstName=first; users[uIdx].lastName=last; users[uIdx].username=user; if(pass) users[uIdx].password=pass;
+      safeSetJSON('retail_roster_users_v1', users);
+    }
+    // Update all fortnights
+    var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+    for(var f=0;f<fns.length;f++){
+      var fn=fns[f];
+      if(!fn.staff) continue;
+      var s=fn.staff.find(function(st){ return st.username && st.username.toLowerCase()===oldUser.toLowerCase(); });
+      if(s){
+        s.firstName=first; s.lastName=last; s.username=user; s.shifts=newShifts.slice();
+      }
+    }
+    safeSetJSON('retail_roster_byFortnight_v1', fns);
+    document.getElementById('hidden-edit-modal').remove();
+    toast('Updated hidden staff: '+first+' '+last);
+    renderHiddenStaffPage();
+    renderRosterSafe();
+    try{ debouncedCloudSave(); cloudSave(); }catch(e){}
+    // LIVE SYNC
+    try{
+      var state=getAllState();
+      state._ts=Date.now();
+      state._lastHiddenEditTs=Date.now();
+      if(typeof db!=='undefined' && db && db.ref){
+        db.ref('repco_state').set(state);
+      } else if(typeof FIREBASE_DB_URL!=='undefined'){
+        fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
+      }
+      fetch(FIREBASE_DB_URL+'/retail_roster_hidden_staff_v1.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(hidden),mode:'cors'}).catch(function(){});
+      fetch(FIREBASE_DB_URL+'/retail_roster_users_v1.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(users),mode:'cors'}).catch(function(){});
+    }catch(e){}
+  }catch(e){ console.error(e); toast('Error: '+e.message); }
 }
 
-function addHiddenStaff(){
-  let first=(document.getElementById('hs-first').value||'').trim();
-  let last=(document.getElementById('hs-last').value||'').trim();
-  let user=(document.getElementById('hs-user').value||'').trim();
-  let pass=(document.getElementById('hs-pass').value||'').trim();
-  let type=document.getElementById('hs-type').value||'casual';
-  if(!first||!last||!user||!pass){ toast('Fill first, last, username, password'); return; }
-  let cur=getCurrentFortnight();
-  if(!cur){ toast('No fortnight'); return; }
-  let shifts=[];
-  for(let i=0;i<cur.dates.length;i++){
-    let inp=document.getElementById('hs-shift-'+i);
-    let v=(inp?inp.value:'').trim()||'OFF';
-    if(v==='') v='OFF';
-    shifts.push(v);
-  }
-  let name=first+' '+last;
-  let hidden=safeGetJSON('retail_roster_hidden_v1',[]); // hidden staff
-  if(!hidden.includes(name)) hidden.push(name);
-  safeSetJSON('retail_roster_hidden_v1',hidden);
-  let store=safeGetJSON('retail_roster_hidden_shifts_v1',{});
-  store[name]=shifts;
-  safeSetJSON('retail_roster_hidden_shifts_v1',store);
-  // Add to current fortnight staff list as hidden
-  let fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
-  fns.forEach(fn=>{
-    if(!fn.staff.find(s=> (s.firstName+' '+s.lastName).toLowerCase()===name.toLowerCase())){
-      fn.staff.push({firstName:first, lastName:last, role:'staff', employmentType:type, shifts:shifts.slice(), originalShifts:{}, absentApproved:{}, cellGreen:{}, unavailable:Array(fn.dates.length).fill(false), isHidden:true});
-    }
-  });
-  safeSetJSON('retail_roster_byFortnight_v1',fns);
-  // Create login
-  let users=safeGetJSON('retail_roster_users_v1',[]);
-  if(!users.find(u=>u.username.toLowerCase()===user.toLowerCase())){
-    users.push({username:user, password:pass, firstName:first, lastName:last, role:'staff', employmentType:type, isHidden:true});
-    safeSetJSON('retail_roster_users_v1',users);
-  }
-  toast('Added hidden staff '+name+' - login '+user);
-  document.getElementById('hs-first').value='';
-  document.getElementById('hs-last').value='';
-  document.getElementById('hs-user').value='';
-  document.getElementById('hs-pass').value='';
-  renderHiddenStaffPage();
-  renderRosterSafe(); applyRoleVisibility();
-}
-function deleteHiddenStaff(name){
-  if(!confirm('Delete hidden staff '+name+'?')) return;
-  let hidden=safeGetJSON('retail_roster_hidden_v1',[]); // hidden staff
-  hidden=hidden.filter(n=>n!==name);
-  safeSetJSON('retail_roster_hidden_v1',hidden);
-  let store=safeGetJSON('retail_roster_hidden_shifts_v1',{});
-  delete store[name];
-  safeSetJSON('retail_roster_hidden_shifts_v1',store);
-  let fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
-  fns.forEach(fn=>{
-    fn.staff=fn.staff.filter(s=> (s.firstName+' '+s.lastName).toLowerCase()!==name.toLowerCase());
-  });
-  safeSetJSON('retail_roster_byFortnight_v1',fns);
-  let users=safeGetJSON('retail_roster_users_v1',[]);
-  users=users.filter(u=> (u.firstName+' '+u.lastName).toLowerCase()!==name.toLowerCase());
-  safeSetJSON('retail_roster_users_v1',users);
-  toast('Deleted '+name);
-  renderHiddenStaffPage();
-  renderRosterSafe(); applyRoleVisibility();
-}
-function unhideEmployee(name){
-  let hidden=safeGetJSON('retail_roster_hidden_v1',[]); // hidden staff
-  hidden=hidden.filter(n=>n!==name);
-  safeSetJSON('retail_roster_hidden_v1',hidden);
-  let fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
-  fns.forEach(fn=>{
-    let s=fn.staff.find(st=> (st.firstName+' '+st.lastName).toLowerCase()===name.toLowerCase());
-    if(s) s.isHidden=false;
-  });
-  safeSetJSON('retail_roster_byFortnight_v1',fns);
-  toast('Unhidden '+name+' - now visible to all');
-  renderHiddenStaffPage();
-  renderRosterSafe(); applyRoleVisibility();
-}
+
 
 function cloudSave(){}
 
