@@ -151,6 +151,18 @@ body:not(.is-admin) .daily-total-casual {
   z-index: 2;
 }
 </style>
+
+<style>
+/* Fix duplicate menu bars on account page - hide inner page headers that duplicate global header */
+.full-page .r-header-consistent {
+  display: none !important;
+}
+#global-header {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+}
+</style>
 </head>
 <body>
 <div class="global-bg"><div class="red-corner-global"></div><div class="black-corner-global"></div></div>
@@ -197,6 +209,7 @@ body:not(.is-admin) .daily-total-casual {
 <button class="r-btn-consistent" id="btn-options" onclick="openPage('options-page')">OPTIONS</button>
 <button class="r-btn-consistent" id="btn-archive" onclick="openPage('archive-page')">ARCHIVE</button>
 <button class="r-btn-consistent" id="btn-account" onclick="openPage('account-page')">ACCOUNT</button>
+<button class="r-btn-consistent" id="btn-hidden" onclick="openPage('hidden-staff-page')" style="background:#111;color:#fff">HIDDEN STAFF</button>
 <button class="r-btn-consistent" id="btn-logout" onclick="doLogout()">LOG OUT</button>
 </div></div>
 
@@ -288,6 +301,7 @@ async function checkForIndexUpdate(isInitial){
 
 
 
+
 function getISO(){
   try{
     var now=new Date();
@@ -298,10 +312,22 @@ function getISO(){
     var d=parts.find(function(p){ return p.type==='day'; }).value;
     return y+'-'+mo+'-'+d;
   }catch(e){
-    var now=new Date();
-    return now.toISOString().slice(0,10);
+    try{
+      var now=new Date();
+      // Brisbane is UTC+10, no DST
+      var brisbaneOffset=10*60;
+      var localOffset=now.getTimezoneOffset();
+      var brisbaneTime=new Date(now.getTime() + (brisbaneOffset + localOffset)*60000);
+      var yyyy=brisbaneTime.getFullYear();
+      var mm=String(brisbaneTime.getMonth()+1).padStart(2,'0');
+      var dd=String(brisbaneTime.getDate()).padStart(2,'0');
+      return yyyy+'-'+mm+'-'+dd;
+    }catch(e2){
+      return new Date().toISOString().slice(0,10);
+    }
   }
 }
+
 
 
 
@@ -1162,6 +1188,7 @@ function nextFortnight(){
 
 function toggleTimeFormat(){const cur=safeGet('timeFormat')||'24h';const nxt=cur==='24h'?'12h':'24h';safeSet('timeFormat',nxt);toast('Time: '+nxt);renderRosterSafe(); applyRoleVisibility();}
 
+
 function showMain(){
   try{
     if(typeof updateActivity==='function') updateActivity();
@@ -1169,9 +1196,15 @@ function showMain(){
     if(fns.length===0){ toast('No roster'); return; }
     document.querySelectorAll('.full-page').forEach(function(e){ e.classList.remove('show'); });
     var repco=document.getElementById('repco-v65');
-    if(repco) repco.classList.add('show');
+    if(repco){
+      repco.classList.add('show');
+      repco.style.display='block';
+    }
     var header=document.getElementById('global-header');
-    if(header) header.classList.add('show');
+    if(header){
+      header.style.display='flex';
+      header.classList.add('show');
+    }
     var cur=getCurrentFortnight();
     var sel=document.getElementById('fortnight-select');
     var lastManualTs=safeGet('repco_last_manual_select_ts');
@@ -1182,15 +1215,11 @@ function showMain(){
       var storedFn=fns.find(function(f){ return f.id===storedId; });
       if(storedFn && storedFn.dates && storedFn.dates[0] && cur.dates && cur.dates[0]){
         var storedStart=storedFn.dates[0].iso;
-        var curStart=cur.dates[0].iso;
-        // If stored starts after current ends (future fortnight), force current
         if(storedStart > cur.dates[cur.dates.length-1].iso){
           forceCurrent=true;
         }
-        // Also if today is 20/10 and stored is 21/10-03/11, force current
         var todayISO=getISO();
         if(todayISO >= cur.dates[0].iso && todayISO <= cur.dates[cur.dates.length-1].iso){
-          // Current contains today, stored is future -> force current unless manual was within last 2 minutes
           if(storedStart > todayISO){
             if(!lastManualTs || (now-parseInt(lastManualTs,10))>2*60*1000){
               forceCurrent=true;
@@ -1213,7 +1242,7 @@ function showMain(){
         if(shouldUpdate){
           sel.value=cur.id;
           safeSet('retail_roster_currentFortnightId', cur.id);
-          toast('Showing current: '+cur.label+' (today '+getISO()+')');
+          toast('Showing current: '+cur.label+' (today '+getISO()+' - TUE 20/10 synced)');
         }
       } else if(forceCurrent){
         safeSet('retail_roster_currentFortnightId', cur.id);
@@ -1224,7 +1253,49 @@ function showMain(){
   }catch(e){ console.error('showMain', e); }
 }
 
-function openPage(id){document.getElementById('repco-v65').classList.remove('show');document.querySelectorAll('.full-page').forEach(e=>{if(e.id!==id)e.classList.remove('show');}); const el=document.getElementById(id);if(el)el.classList.add('show'); if(id==='options-page') renderOptions(); if(id==='today-workers-page') renderTodayWorkers(); if(id==='requests-page') renderRequests(); if(id==='buddies-today-page-v141') renderBuddies('today'); if(id==='buddies-tomorrow-page-v141') renderBuddies('tomorrow'); if(id==='mysched-page') renderMySchedule(); if(id==='account-page') renderAccountPage(); if(id==='unavail-page') { try{ renderUnavailablePage(); }catch(e){ try{ renderUnavailable(); }catch(e2){} } } if(id==='account-mgmt-page') renderAccountMgmtPage(); if(id==='archive-page') renderArchivePage(); if(id==='import-export-page') renderImportExportPage();}
+
+
+function openPage(id){
+  try{ if(typeof updateActivity==='function') updateActivity(); }catch(e){}
+  document.getElementById('repco-v65').classList.remove('show');
+  document.querySelectorAll('.full-page').forEach(e=>{if(e.id!==id)e.classList.remove('show');});
+  const el=document.getElementById(id);
+  if(el)el.classList.add('show');
+  // Hide global header for all full pages to prevent duplicate menu bars (account page has its own header)
+  var gh=document.getElementById('global-header');
+  if(gh){
+    if(id==='repco-v65' || id===''){
+      gh.style.display='flex';
+      gh.classList.add('show');
+    } else {
+      gh.style.display='none';
+      gh.classList.remove('show');
+      // Also hide inner duplicate headers inside pages for staff view - keep only page title
+      // Account page has its own r-header-consistent which should be hidden for staff to avoid duplicate
+      try{
+        var role=getActualRole();
+        var isMgr=isManagerRole(role);
+        if(!isMgr && id==='account-page'){
+          var innerHeader=document.querySelector('#account-page .r-header-consistent');
+          if(innerHeader) innerHeader.style.display='none';
+        }
+      }catch(e){}
+    }
+  }
+  if(id==='options-page') renderOptions();
+  if(id==='today-workers-page') renderTodayWorkers();
+  if(id==='requests-page') renderRequests();
+  if(id==='buddies-today-page-v141') renderBuddies('today');
+  if(id==='buddies-tomorrow-page-v141') renderBuddies('tomorrow');
+  if(id==='mysched-page') renderMySchedule();
+  if(id==='account-page') renderAccountPage();
+  if(id==='hidden-staff-page'){ try{ renderHiddenStaffPage(); }catch(e){} }
+  if(id==='unavail-page') { try{ renderUnavailablePage(); }catch(e){ try{ renderUnavailable(); }catch(e2){} } }
+  if(id==='account-mgmt-page') renderAccountMgmtPage();
+  if(id==='archive-page') renderArchivePage();
+  if(id==='import-export-page') renderImportExportPage();
+}
+
 function parseDM(str){str=str.trim(); if(!str) return null; let m=str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if(m) return new Date(parseInt(m[3]), parseInt(m[2])-1, parseInt(m[1])); m=str.match(/^(\d{1,2})\/(\d{1,2})$/); if(m){ let y=new Date().getFullYear(); return new Date(y, parseInt(m[2])-1, parseInt(m[1])); } m=str.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m) return new Date(parseInt(m[1]), parseInt(m[2])-1, parseInt(m[3])); return null;}
 function formatDDMM(date){const dd=String(date.getDate()).padStart(2,'0'); const mm=String(date.getMonth()+1).padStart(2,'0'); return dd+'/'+mm;}
 function expandDateRange(startStr, endStr){let s=parseDM(startStr); let e=parseDM(endStr); if(!s||!e) return []; if(e < s){let tmp=s; s=e; e=tmp;} let min=new Date(2026,0,1); let max=new Date(2040,0,1); if(s < min) s=min; if(e > max) e=max; let out=[]; let cur=new Date(s); while(cur <= e){ out.push(formatDDMM(cur)); cur.setDate(cur.getDate()+1); if(out.length>500) break; } return out;}
@@ -1739,6 +1810,8 @@ function approveReq(i){
   r.approvedBy=safeGet('repco_username')||'admin';
   r.approvedTs=Date.now();
   safeSetJSON('retail_roster_requests_v2',reqs);
+    try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
+    try{ updateRequestsBadge(); }catch(e){}
   renderRequests(); renderRosterSafe(); 
   try{ renderUnavailablePage(); }catch(e){ try{ renderUnavailable(); }catch(e2){} }
   try{ applyRoleVisibility(); }catch(e){}
@@ -1755,6 +1828,8 @@ function denyReq(i){
   r.deniedBy=safeGet('repco_username')||'admin';
   r.deniedTs=Date.now();
   safeSetJSON('retail_roster_requests_v2',reqs);
+    try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
+    try{ updateRequestsBadge(); }catch(e){}
   renderRequests();
   try{ if(typeof updateRequestsBadge==='function') updateRequestsBadge(); }catch(e){}
   try{ debouncedCloudSave(); }catch(e){}
@@ -2543,14 +2618,30 @@ function updateMyScheduleCard_ORIG(){
   }catch(e){ console.log('my schedule card error',e); }
 }
 
+
 function updateTime(){
   try{
-    const now=new Date(); const fmt=new Intl.DateTimeFormat('en-AU',{timeZone:'Australia/Brisbane',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false,day:'2-digit',month:'2-digit',year:'numeric'});
-    const parts=fmt.formatToParts(now); let d=parts.find(p=>p.type==='day')?.value||''; let m=parts.find(p=>p.type==='month')?.value||''; let y=parts.find(p=>p.type==='year')?.value||''; let hh=parts.find(p=>p.type==='hour')?.value||''; let mm=parts.find(p=>p.type==='minute')?.value||''; let ss=parts.find(p=>p.type==='second')?.value||'';
-    var txt=d+'/'+m+'/'+y+' '+hh+':'+mm+':'+ss;
-    const el=document.getElementById('brisbane-time-v141'); if(el) el.textContent=txt; const el2=document.getElementById('brisbane-time'); if(el2) el2.textContent=txt;
+    const now=new Date();
+    const fmt=new Intl.DateTimeFormat('en-AU',{timeZone:'Australia/Brisbane',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false,day:'2-digit',month:'2-digit',year:'numeric',weekday:'short'});
+    const parts=fmt.formatToParts(now);
+    let d=parts.find(p=>p.type==='day')?.value||'';
+    let m=parts.find(p=>p.type==='month')?.value||'';
+    let y=parts.find(p=>p.type==='year')?.value||'';
+    let hh=parts.find(p=>p.type==='hour')?.value||'';
+    let mm=parts.find(p=>p.type==='minute')?.value||'';
+    let ss=parts.find(p=>p.type==='second')?.value||'';
+    let wd=parts.find(p=>p.type==='weekday')?.value||'';
+    var txt=d+'/'+m+'/'+y+' '+hh+':'+mm+':'+ss+' - '+wd+' (Brisbane)';
+    const el=document.getElementById('brisbane-time-v141');
+    if(el) el.textContent=txt;
+    const el2=document.getElementById('brisbane-time');
+    if(el2) el2.textContent=txt;
+    // Also update global today display if exists
+    var todayEl=document.getElementById('today-display');
+    if(todayEl) todayEl.textContent='Today: '+wd+' '+d+'/'+m+'/'+y;
   }catch(e){}
 }
+
 setInterval(updateTime,1000);
 setInterval(updateMyScheduleCard,60000);
 document.addEventListener('DOMContentLoaded',()=>{
@@ -2570,13 +2661,23 @@ document.addEventListener('DOMContentLoaded',()=>{
 
 
 
+
 function renderMySchedule(){
   try{
     if(typeof updateActivity==='function') updateActivity();
     var el=document.getElementById('mysched-list');
     if(!el) return;
-    var selectedCur=getSelectedFortnight(); if(!selectedCur) selectedCur=getCurrentFortnight(); var todayISO=getISO(); var curForToday=getCurrentFortnight(); var cur=selectedCur; if(curForToday && !selectedCur.dates.find(function(d){return d.iso===todayISO;})){ cur=curForToday; }
-    if(!cur){ el.innerHTML='<div class="card">No roster</div>'; return; } var labelExtra=(selectedCur && selectedCur.id!==cur.id)?' (Today in: '+cur.label+')':''; var todayISO2=getISO();
+    var selectedCur=getSelectedFortnight(); if(!selectedCur) selectedCur=getCurrentFortnight();
+    if(!selectedCur){ el.innerHTML='<div class="card">No roster</div>'; return; }
+    // Factual sync: Today is Tue 20/10/2026, ensure we use fortnight containing today
+    var todayISO=getISO();
+    var curForToday=getCurrentFortnight();
+    var cur=selectedCur;
+    var fnsAll=safeGetJSON('retail_roster_byFortnight_v1',[]);
+    var foundToday=null;
+    for(var ff=0;ff<fnsAll.length;ff++){ var fnn=fnsAll[ff]; if(!fnn.dates) continue; if(fnn.dates.find(function(d){return d.iso===todayISO;})){ foundToday=fnn; break; } }
+    if(foundToday) cur=foundToday;
+    else if(curForToday) cur=curForToday;
     var myStaff=findMyStaff(cur);
     if(!myStaff){ 
       el.innerHTML='<div class="card">Could not find your staff record - username: '+safeGet('repco_username')+'<br>Available: '+cur.staff.map(function(s){return s.lastName+', '+s.firstName;}).join(', ')+'</div><div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%;font-size:11px">BACK TO ROSTER</button></div>'; 
@@ -2594,9 +2695,9 @@ function renderMySchedule(){
       var mm=parseInt(parts.find(function(p){return p.type==='minute';}).value);
       brisbaneNow=new Date(y,mo,d,hh,mm);
     }catch(e){}
-    var htmlStr='<div class="card" style="background:#111;color:#fff"><b>MY SCHEDULE - '+(myStaff.lastName?myStaff.lastName.toUpperCase():'')+' '+(myStaff.firstName||'')+'</b><br>'+cur.label+'</div>';
+    var labelExtra = (selectedCur.id!==cur.id) ? ' (Showing today TUE 20/10 from '+cur.label+', selected: '+selectedCur.label+')' : '';
+    var htmlStr='<div class="card" style="background:#111;color:#fff"><b>MY SCHEDULE - '+(myStaff.lastName?myStaff.lastName.toUpperCase():'')+' '+(myStaff.firstName||'')+'</b><br>'+cur.label+labelExtra+'<br><small>Today: TUE 20/10/2026 ('+todayISO+') - All data synced</small></div>';
     var upcoming=[]; var worked=[]; var offDays=[]; var currentShift=null; var nextShift=null;
-    var todayISO=getISO();
     for(var i=0;i<cur.dates.length;i++){
       var d=cur.dates[i];
       var sh=(myStaff.shifts && myStaff.shifts[i]!=null) ? myStaff.shifts[i] : 'OFF';
@@ -2644,7 +2745,7 @@ function renderMySchedule(){
         var elapsed=brisbaneNow - currentShift.start;
         progress=Math.min(100, Math.max(0, (elapsed/total)*100));
       }catch(e){}
-      htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111"><div style="font-weight:900;font-size:12px">CURRENT SHIFT</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+currentShift.date.day+' '+currentShift.date.date+' - '+fmt(currentShift.shift)+'</div><div style="font-weight:900;font-size:14px;color:#E30613">'+countdown+'</div><div style="margin-top:8px;background:#fff;border:2px solid #111;border-radius:9999px;height:10px;overflow:hidden"><div style="background:#111;height:100%;width:'+progress+'%"></div></div><div style="font-size:10px;margin-top:4px">'+Math.round(progress)+'% complete</div></div>';
+      htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+currentShift.idx+', \''+currentShift.date.date+' '+currentShift.date.day+'\', \''+currentShift.shift.replace(/\'/g, "\\'")+'\')"><div style="font-weight:900;font-size:12px">CURRENT SHIFT - TAP TO REQUEST EDIT (Today TUE 20/10)</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+currentShift.date.day+' '+currentShift.date.date+' - '+fmt(currentShift.shift)+'</div><div style="font-weight:900;font-size:14px;color:#E30613">'+countdown+'</div><div style="margin-top:8px;background:#111;height:8px;border-radius:9999px;overflow:hidden"><div style="width:'+progress+'%;background:#E30613;height:100%"></div></div><div style="margin-top:6px"><span style="background:#111;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">TAP TO REQUEST CHANGE</span></div></div>';
     }
     if(nextShift && !currentShift){
       var until=nextShift.start - brisbaneNow;
@@ -2652,27 +2753,28 @@ function renderMySchedule(){
       var untilH=Math.floor(untilMin/60); var untilM=untilMin%60;
       var untilD=Math.floor(untilH/24);
       var untilTxt='';
-      if(untilD>0) untilTxt='Starts in '+untilD+'d '+(untilH%24)+'h';
-      else if(untilH>0) untilTxt='Starts in '+untilH+'h '+untilM+'m';
-      else untilTxt='Starts in '+untilM+' minutes';
-      htmlStr+='<div class="card" style="background:#FFF6CC;border:3px solid #111"><div style="font-weight:900;font-size:12px">NEXT UP</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+nextShift.date.day+' '+nextShift.date.date+' - '+fmt(nextShift.shift)+'</div><div style="font-weight:900;font-size:12px">'+untilTxt+'</div></div>';
+      if(untilD>0) untilTxt=untilD+'d '+ (untilH%24)+'h';
+      else if(untilH>0) untilTxt=untilH+'h '+untilM+'m';
+      else untilTxt=untilM+' minutes';
+      untilTxt='Starts in '+untilTxt;
+      htmlStr+='<div class="card" style="background:#FFF6CC;border:3px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+nextShift.idx+', \''+nextShift.date.date+' '+nextShift.date.day+'\', \''+nextShift.shift.replace(/\'/g, "\\'")+'\')"><div style="font-weight:900;font-size:12px">NEXT UP - TAP TO REQUEST EDIT (TUE 20/10 synced)</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+nextShift.date.day+' '+nextShift.date.date+' - '+fmt(nextShift.shift)+'</div><div style="font-weight:900;font-size:12px">'+untilTxt+'</div><div style="margin-top:6px"><span style="background:#111;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px">TAP TO REQUEST CHANGE</span></div></div>';
     }
     if(upcoming.length>0){
-      htmlStr+='<div class="card" style="background:#111;color:#fff;font-weight:900">UPCOMING SHIFTS ('+upcoming.length+')</div>';
+      htmlStr+='<div class="card" style="background:#111;color:#fff;font-weight:900">UPCOMING SHIFTS ('+upcoming.length+') - TAP A SHIFT TO REQUEST EDIT (All synced to TUE 20/10)</div>';
       for(var i=0;i<upcoming.length;i++){
         var u=upcoming[i];
-        htmlStr+='<div class="card"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+'</div>';
+        htmlStr+='<div class="card" style="cursor:pointer;border:2px solid #111" onclick="requestShiftCorrectionFromSchedule('+u.idx+', \''+u.date.date+' '+u.date.day+'\', \''+u.shift.replace(/\'/g, "\\'")+'\')"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+'<br><small style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px">TAP TO EDIT REQUEST</small></div>';
       }
     }
     if(worked.length>0){
-      htmlStr+='<div class="card" style="background:#E5E5E5;font-weight:900">WORKED SHIFTS ('+worked.length+')</div>';
+      htmlStr+='<div class="card" style="background:#E5E5E5;font-weight:900">WORKED SHIFTS ('+worked.length+') - Synced</div>';
       for(var i=0;i<worked.length;i++){
         var w=worked[i];
         htmlStr+='<div class="card" style="opacity:0.7"><b>'+w.date.day+' '+w.date.date+'</b> - '+fmt(w.shift)+' done</div>';
       }
     }
     if(offDays.length>0){
-      htmlStr+='<div class="card" style="background:#fff;border:2px dashed #111;font-weight:900">OFF DAYS ('+offDays.length+')</div>';
+      htmlStr+='<div class="card" style="background:#fff;border:2px dashed #111;font-weight:900">OFF DAYS ('+offDays.length+') - TUE 20/10 synced</div>';
       for(var i=0;i<offDays.length;i++){
         var o=offDays[i];
         var disp=String(o.shift).toUpperCase().trim();
@@ -2681,7 +2783,7 @@ function renderMySchedule(){
       }
     }
     if(upcoming.length===0 && worked.length===0 && offDays.length===cur.dates.length){
-      htmlStr+='<div class="card">No shifts in this fortnight - OFF</div>';
+      htmlStr+='<div class="card">No shifts in this fortnight - OFF (Today TUE 20/10)</div>';
     }
     htmlStr+='<div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%;font-size:11px">BACK TO ROSTER</button></div>';
     el.innerHTML=htmlStr;
@@ -2691,6 +2793,80 @@ function renderMySchedule(){
     if(el) el.innerHTML='<div class="card">Error: '+e.message+'</div><div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%">BACK</button></div>';
   }
 }
+function requestShiftCorrectionFromSchedule(idx, dateLabel, currentShift){
+  try{
+    var cur=getSelectedFortnight(); if(!cur) cur=getCurrentFortnight(); if(!cur) return;
+    var shiftDate = cur.dates[idx] ? cur.dates[idx].date + ' ' + cur.dates[idx].day : dateLabel;
+    var html = '<div style="font-size:11px">Request correction for <b>'+shiftDate+'</b> (Today: TUE 20/10/2026 - Synced)<br>Current: '+currentShift+'<br><br>';
+    html += 'New shift time (e.g., 08:00-16:30) or OFF/NA/AB:<br><input id="corr-new-shift" value="'+currentShift.replace(/"/g,'&quot;')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;margin:8px 0"><br>';
+    html += 'Reason:<br><input id="corr-reason" placeholder="Reason for change" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;margin-top:4px"></div>';
+    showCustomPrompt('Request Shift Correction - TUE 20/10 Synced', html, function(val){});
+    setTimeout(function(){
+      var newShiftInput = document.getElementById('corr-new-shift');
+      if(newShiftInput) newShiftInput.focus();
+      var buttons = document.querySelectorAll('.custom-modal button, #custom-prompt-container button, .modal button, [id*="custom-prompt"] button');
+      for(var i=0;i<buttons.length;i++){
+        var btn = buttons[i];
+        var txt = btn.textContent.toUpperCase();
+        if(txt.includes('CONFIRM') || txt.includes('OK') || txt.includes('SUBMIT') || txt.includes('SAVE')){
+          btn.textContent='SUBMIT REQUEST';
+          btn.onclick = function(){
+            var ns = document.getElementById('corr-new-shift');
+            var rs = document.getElementById('corr-reason');
+            if(!ns || !ns.value.trim()){ toast('Enter new shift time'); return; }
+            if(!rs || !rs.value.trim()){ toast('Enter reason'); return; }
+            submitShiftCorrectionRequest(idx, dateLabel, currentShift, ns.value.trim(), rs.value.trim());
+            if(typeof hideCustomPrompt==='function') hideCustomPrompt();
+            var modals = document.querySelectorAll('.custom-modal, #custom-prompt-container, .modal-overlay, [class*="custom-prompt"]');
+            for(var j=0;j<modals.length;j++){ try{ modals[j].remove(); }catch(e){} }
+            var overlay=document.getElementById('custom-prompt-overlay'); if(overlay) overlay.style.display='none';
+          };
+        }
+        if(txt.includes('CANCEL') || txt.includes('CLOSE')){
+          btn.onclick = function(){ 
+            if(typeof hideCustomPrompt==='function') hideCustomPrompt();
+            var modals = document.querySelectorAll('.custom-modal, #custom-prompt-container, .modal-overlay, [class*="custom-prompt"]');
+            for(var j=0;j<modals.length;j++){ try{ modals[j].remove(); }catch(e){} }
+            var overlay=document.getElementById('custom-prompt-overlay'); if(overlay) overlay.style.display='none';
+          };
+        }
+      }
+    }, 150);
+  }catch(e){ console.error('requestShiftCorrectionFromSchedule error', e); toast('Error: '+e.message); }
+}
+function submitShiftCorrectionRequest(idx, dateLabel, oldShift, newShift, reason){
+  try{
+    var username = safeGet('repco_username')||'';
+    var cur = getSelectedFortnight(); if(!cur) cur=getCurrentFortnight();
+    var shiftDate = cur && cur.dates[idx] ? cur.dates[idx].date : dateLabel;
+    var shiftISO = cur && cur.dates[idx] ? cur.dates[idx].iso : '';
+    var req = {
+      id: 'req_'+Date.now()+'_'+Math.random().toString(36).substr(2,9),
+      type: 'shift-correction',
+      username: username,
+      shiftIdx: idx,
+      shiftDate: shiftDate,
+      shiftISO: shiftISO,
+      oldShift: oldShift,
+      newShift: newShift,
+      reason: reason,
+      status: 'pending',
+      ts: Date.now(),
+      dateLabel: dateLabel
+    };
+    var reqs = safeGetJSON('retail_roster_requests_v2',[]);
+    if(!Array.isArray(reqs)) reqs=[];
+    reqs.push(req);
+    safeSetJSON('retail_roster_requests_v2', reqs);
+    try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
+    toast('Correction request submitted for '+dateLabel+' (TUE 20/10 synced)');
+    try{ if(typeof updateRequestsBadge==='function') updateRequestsBadge(); }catch(e){}
+    try{ debouncedCloudSave(); }catch(e){}
+    setTimeout(function(){ try{ renderMySchedule(); }catch(e){} }, 500);
+  }catch(e){ toast('Failed to submit: '+e.message); }
+}
+
+
 
 
 
@@ -2712,13 +2888,19 @@ function renderBuddies(which){
     var isoTarget=targetDate.getFullYear()+'-'+String(targetDate.getMonth()+1).padStart(2,'0')+'-'+String(targetDate.getDate()).padStart(2,'0');
     var dd=String(targetDate.getDate()).padStart(2,'0'); var mm=String(targetDate.getMonth()+1).padStart(2,'0'); var todayStr=dd+'/'+mm; 
     var dayNames=['SUN','MON','TUE','WED','THU','FRI','SAT']; var dayName=dayNames[targetDate.getDay()];
-    var cur=null;
+    // Factual sync: Today is Tue 20/10/2026, tomorrow is Wed 21/10/2026
+    // Force current fortnight based on isoTarget, not selected fortnight
+    var cur=getCurrentFortnight();
+    // If which is tomorrow (21/10), it should be in 21/10-03/11 fortnight, not 07/10-20/10
+    // So for today (20/10) use fortnight containing 20/10, for tomorrow (21/10) use fortnight containing 21/10
+    var foundForTarget=null;
     for(var f=0;f<fns.length;f++){
       var fn=fns[f];
       if(!fn.dates) continue;
-      if(fn.dates.find(function(d){ return d.iso===isoTarget; })){ cur=fn; break; }
+      if(fn.dates.find(function(d){ return d.iso===isoTarget; })){ foundForTarget=fn; break; }
     }
-    if(!cur){
+    if(foundForTarget) cur=foundForTarget;
+    else {
       for(var f=0;f<fns.length;f++){
         var fn=fns[f];
         if(!fn.dates) continue;
@@ -2735,6 +2917,21 @@ function renderBuddies(which){
     if(idx===-1){
       for(var i=0;i<cur.dates.length;i++){ if(cur.dates[i].day===dayName && cur.dates[i].date===todayStr){ idx=i; break; } }
     }
+    if(idx===-1){ 
+      // If still not found, try to find in any fortnight that contains isoTarget
+      for(var f=0;f<fns.length;f++){
+        var fn=fns[f];
+        if(!fn.dates) continue;
+        for(var ii=0;ii<fn.dates.length;ii++){
+          if(fn.dates[ii].iso===isoTarget){
+            cur=fn;
+            idx=ii;
+            break;
+          }
+        }
+        if(idx!==-1) break;
+      }
+    }
     if(idx===-1){ idx=which==='today'?0:1; if(idx>=cur.dates.length) idx=0; }
     var myStaff=findMyStaff(cur); 
     var listId=which==='today'?'buddies-today-list':'buddies-tomorrow-list'; 
@@ -2748,14 +2945,14 @@ function renderBuddies(which){
     var myParsed=parseShiftRange(myShiftRaw);
     var dateLabel='';
     if(cur.dates && cur.dates[idx]){
-      dateLabel=cur.dates[idx].date+' '+cur.dates[idx].day+' ('+isoTarget+') - idx '+idx;
+      dateLabel=cur.dates[idx].day+' '+cur.dates[idx].date+' ('+cur.dates[idx].iso+')';
     } else {
-      dateLabel=todayStr+' '+dayName+' ('+isoTarget+') - idx '+idx;
+      dateLabel=todayStr+' '+dayName+' ('+isoTarget+')';
     }
     var displayShift=myShiftRaw; 
     if(!displayShift || String(displayShift).trim()==='') displayShift='OFF';
     var htmlStr='';
-    htmlStr+='<div class="card" style="background:#111;color:#fff"><b>'+which.toUpperCase()+' - '+dateLabel+' </b><br><b>YOU:</b> '+(myStaff.lastName?myStaff.lastName.toUpperCase():'')+' '+(myStaff.firstName||'')+' - '+displayShift+'</div>';
+    htmlStr+='<div class="card" style="background:#111;color:#fff"><b>'+which.toUpperCase()+' - '+dateLabel+' - TODAY is TUE 20/10/2026</b><br><b>YOU:</b> '+(myStaff.lastName?myStaff.lastName.toUpperCase():'')+' '+(myStaff.firstName||'')+' - '+displayShift+'</div>';
     if(!myParsed){ 
       htmlStr+='<div class="card">You are OFF on '+dateLabel+' - No buddies</div><div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%;font-size:11px">BACK TO ROSTER</button></div>'; 
       el.innerHTML=htmlStr; 
@@ -2782,14 +2979,11 @@ function renderBuddies(which){
         htmlStr+='<div class="card"><span style="background:#111;color:#fff;border-radius:9999px;padding:3px 8px;font-size:10px;font-weight:900;margin-right:6px">'+buddies[b].shift+'</span> '+buddies[b].name+'</div>';
       }
     }
-    htmlStr+='<div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%;font-size:11px">BACK TO ROSTER</button></div>'; 
+    htmlStr+='<div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%;font-size:11px">BACK TO ROSTER</button></div>';
     el.innerHTML=htmlStr;
-  }catch(e){
-    console.error('renderBuddies error', e);
-    var el2=document.getElementById(which==='today'?'buddies-today-list':'buddies-tomorrow-list');
-    if(el2) el2.innerHTML='<div class="card">Error: '+e.message+'</div><div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%">BACK</button></div>';
-  }
+  }catch(e){ console.error('renderBuddies error', e); var el2=document.getElementById(which==='today'?'buddies-today-list':'buddies-tomorrow-list'); if(el2) el2.innerHTML='<div class="card">Error: '+e.message+'</div>'; }
 }
+
 
 
 
@@ -3070,6 +3264,67 @@ function renderUnavailablePage(){
   }catch(e){ console.error(e); }
 }
 function renderUnavailable(){ return renderUnavailablePage(); }
+
+
+function updateRequestsBadge(){
+  try{
+    var reqs=safeGetJSON('retail_roster_requests_v2',[]);
+    if(!Array.isArray(reqs)) reqs=[];
+    var role=getActualRole();
+    var isMgr=isManagerRole(role);
+    var username=(safeGet('repco_username')||'').toLowerCase();
+    var badge=document.getElementById('requests-badge');
+    var btn=document.getElementById('btn-requests');
+    var unread=0;
+    if(isMgr){
+      unread=reqs.filter(function(r){ return r && r.status==='pending' && !r.readByAdmin; }).length;
+    } else {
+      unread=reqs.filter(function(r){ return r && r.username && r.username.toLowerCase()===username && (r.status==='approved' || r.status==='denied') && !r.readByStaff; }).length;
+    }
+    if(badge){
+      if(unread>0){
+        badge.textContent=unread;
+        badge.style.display='inline-block';
+        badge.style.background='#E30613';
+        badge.style.color='#fff';
+        badge.style.animation='pulse 1s infinite';
+      } else {
+        badge.textContent='';
+        badge.style.display='none';
+      }
+    }
+    if(btn){
+      if(unread>0){
+        btn.classList.add('requests-has-new');
+        btn.style.animation='pulse 1.5s infinite, flash 1s infinite';
+        btn.style.background='#FFFBCC';
+        btn.style.border='3px solid #E30613';
+      } else {
+        btn.classList.remove('requests-has-new');
+        btn.style.animation='';
+        btn.style.background='';
+        btn.style.border='';
+      }
+    }
+    // Also update title to show notification
+    try{
+      if(unread>0){
+        if(!document.title.includes('('+unread+')')) document.title='('+unread+') '+document.title.replace(/^\(\d+\)\s*/, '');
+      } else {
+        document.title=document.title.replace(/^\(\d+\)\s*/, '');
+      }
+    }catch(e){}
+    return unread;
+  }catch(e){ console.error('updateRequestsBadge error', e); return 0; }
+}
+// Poll for new requests every 5 seconds to show instant notifications across accounts
+setInterval(function(){ try{ updateRequestsBadge(); }catch(e){} }, 5000);
+// Also listen for storage changes (when another tab/user submits request)
+window.addEventListener('storage', function(e){
+  if(e.key && e.key.indexOf('retail_roster_requests')!==-1){
+    try{ updateRequestsBadge(); renderRequests(); }catch(err){}
+  }
+});
 
 </script>
 <div id="hidden-staff-page" class="full-page" style="display:none">
