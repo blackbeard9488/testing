@@ -361,7 +361,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022260000_FIX_HIDDEN_GRID_REMOVE_BANNER_V30";
+const BUILD_ID="20261022300000_FIX_DELETE_SYNC_V34";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -470,12 +470,13 @@ function applyCloudState(state,isInitial){
   var SESSION_BLOCK=['repco_username','repco_currentRole','repco_last_activity','repco_last_login_ts','repco_logout_minutes'];
   CLOUD_KEYS.forEach(function(k){
     if(SESSION_BLOCK.indexOf(k)!==-1) return;
+    if(k==='retail_roster_requests_v2') return; // Handle requests separately with merge to prevent old requests coming back
     if(state[k]!==undefined){
       try{localStorage.setItem(k,state[k]);}catch(e){}
       if(typeof MEMORY_STORE!=='undefined') MEMORY_STORE[k]=state[k];
     }
   });
-  // Merge requests for cross-device: Daniel mobile -> admin desktop - FIXED for live denied/approved sync
+  // Merge requests for cross-device: FIXED to prevent old requests coming back on refresh
   if(state['retail_roster_requests_v2']!==undefined){
     try{
       var cloudReqs=null;
@@ -486,6 +487,8 @@ function applyCloudState(state,isInitial){
         var idToIndex={};
         for(var li=0;li<merged.length;li++){ if(merged[li] && merged[li].id) idToIndex[merged[li].id]=li; }
         var changed=false;
+        
+        // First, update existing requests with newest status based on timestamp
         for(var i=0;i<cloudReqs.length;i++){
           var cr=cloudReqs[i];
           if(!cr || !cr.id) continue;
@@ -495,28 +498,127 @@ function applyCloudState(state,isInitial){
             idToIndex[cr.id]=merged.length-1;
             changed=true;
           } else {
-            // Update existing if cloud version is newer or status changed (pending->approved/denied)
             var local=merged[existingIdx];
-            if(local.status!==cr.status || (cr.approvedTs && cr.approvedTs!==local.approvedTs) || (cr.deniedTs && cr.deniedTs!==local.deniedTs) || cr.readByStaff!==local.readByStaff){
-              merged[existingIdx]=cr;
-              changed=true;
-              console.log('Updated request from cloud:', cr.id, 'status', local.status, '->', cr.status);
+            // Determine which is newer - compare deniedTs, approvedTs, ts
+            var cloudTime=cr.deniedTs||cr.approvedTs||cr.ts||0;
+            var localTime=local.deniedTs||local.approvedTs||local.ts||0;
+            // If local is denied/approved and cloud is pending, keep local (newer action)
+            // If cloud is newer timestamp, use cloud
+            // Also if status differs, keep the one with higher priority: denied/approved > pending, and newer timestamp wins
+            var keepCloud=false;
+            var keepLocal=false;
+            
+            if(local.status==='denied' || local.status==='rejected' || local.status==='approved'){
+              // Local has been actioned
+              if(cr.status==='pending'){
+                // Cloud is still pending, local is actioned - keep local (admin actioned)
+                keepLocal=true;
+              } else {
+                // Both actioned, keep newest by timestamp
+                if(cloudTime>localTime) keepCloud=true;
+                else keepLocal=true;
+              }
+            } else if(cr.status==='denied' || cr.status==='rejected' || cr.status==='approved'){
+              // Cloud is actioned, local is pending - keep cloud (admin actioned from other device)
+              keepCloud=true;
+            } else {
+              // Both pending, keep newest
+              if(cloudTime>localTime) keepCloud=true;
+            }
+            
+            if(keepCloud){
+              if(JSON.stringify(local)!==JSON.stringify(cr)){
+                merged[existingIdx]=cr;
+                changed=true;
+                console.log('Updated request from cloud (newer):', cr.id, 'status', local.status, '->', cr.status);
+              }
+            } else if(keepLocal){
+              // Keep local, do nothing, but ensure cloud will be updated later
+              console.log('Keeping local request (newer actioned):', local.id, 'status', local.status, 'vs cloud', cr.status);
             }
           }
         }
-        // Also handle case where cloud has fewer but updated statuses - always update if changed
-        if(changed || cloudReqs.length!==localReqs.length){
-          safeSetJSON('retail_roster_requests_v2', merged);
-          try{localStorage.setItem('retail_roster_requests_update_ts', String(Date.now()));}catch(e){}
-          console.log('Requests merged from cloud - live update for employee My Schedule');
+        
+        // Handle deletions: if cloud has fewer and is newer, remove deleted requests
+        // Check for deleted markers
+        var cloudIds={};
+        for(var ci=0;ci<cloudReqs.length;ci++){ if(cloudReqs[ci] && cloudReqs[ci].id) cloudIds[cloudReqs[ci].id]=true; }
+        
+        // If local has requests that are not in cloud, check if they were deleted (timestamp based)
+        // If cloud timestamp is newer than local's last update, and cloud doesn't have the request, it was deleted on another device
+        var cloudTs=state._ts||0;
+        var localUpdateTs=parseInt(safeGet('repco_cloud_ts')||'0');
+        var requestsUpdateTs=parseInt(safeGet('retail_roster_requests_update_ts')||'0');
+        
+        // If employee deleted a request, cloud will have fewer, and we should respect deletion
+        // Only re-add if cloud is older than local deletion
+        var toRemove=[];
+        for(var li=0;li<merged.length;li++){
+          var lr=merged[li];
+          if(!lr || !lr.id) continue;
+          if(!cloudIds[lr.id]){
+            // Request exists locally but not in cloud - was it deleted in cloud?
+            // Check if we have a deletion marker or if cloud is newer
+            var deletedMarker=null;
+            try{ deletedMarker=localStorage.getItem('retail_roster_deleted_'+lr.id); }catch(e){}
+            if(deletedMarker){
+              // We deleted it locally, keep it deleted
+              toRemove.push(li);
+            } else if(cloudTs>requestsUpdateTs && cloudTs>localUpdateTs){
+              // Cloud is newer and doesn't have this request - it was deleted on another device (employee cancelled)
+              // Remove it locally too for admin sync
+              toRemove.push(li);
+              changed=true;
+              console.log('Removing deleted request (synced from employee):', lr.id);
+            }
+          }
         }
-        // If cloud has more requests, overwrite to ensure consistency
-        if(cloudReqs.length>localReqs.length && !changed){
-          try{localStorage.setItem('retail_roster_requests_v2', JSON.stringify(cloudReqs));}catch(e){}
-          if(typeof MEMORY_STORE!=='undefined') MEMORY_STORE['retail_roster_requests_v2']=JSON.stringify(cloudReqs);
+        
+        // Remove marked deletions in reverse order
+        toRemove.sort(function(a,b){ return b-a; });
+        for(var ri=0;ri<toRemove.length;ri++){
+          merged.splice(toRemove[ri],1);
+        }
+        
+        // Remove duplicates and ensure we keep actioned versions
+        var finalMerged=[];
+        var seen={};
+        for(var m=0;m<merged.length;m++){
+          var r=merged[m];
+          if(!r || !r.id) continue;
+          if(!seen[r.id]){
+            seen[r.id]=true;
+            finalMerged.push(r);
+          } else {
+            // Duplicate id, keep the one with actioned status
+            var existingIdx2=-1;
+            for(var f=0;f<finalMerged.length;f++){ if(finalMerged[f].id===r.id){ existingIdx2=f; break; } }
+            if(existingIdx2!==-1){
+              var existing=finalMerged[existingIdx2];
+              if((r.status==='denied'||r.status==='approved') && existing.status==='pending'){
+                finalMerged[existingIdx2]=r;
+                changed=true;
+              }
+            }
+          }
+        }
+        
+        if(changed || finalMerged.length!==localReqs.length || cloudReqs.length!==localReqs.length || toRemove.length>0){
+          safeSetJSON('retail_roster_requests_v2', finalMerged);
+          try{localStorage.setItem('retail_roster_requests_update_ts', String(Date.now()));}catch(e){}
+          console.log('Requests merged - synced deletions, prevented old requests coming back, final count:', finalMerged.length);
+          try{
+            var currentState=getAllState();
+            if(currentState && typeof db!=='undefined' && db && db.ref){
+              safeSet('repco_cloud_ts', String(Date.now()-1000));
+            }
+          }catch(e){}
         }
       }
     }catch(e){ console.log('merge error', e); }
+  } else {
+    // If no requests in cloud state, keep local requests
+    console.log('No requests in cloud state, keeping local');
   }
   suppressCloudSave=false; 
   if(isInitial){
@@ -1581,7 +1683,8 @@ function openPage(id){
   if(id==='buddies-tomorrow-page-v141') renderBuddies('tomorrow');
   if(id==='mysched-page') renderMySchedule();
   if(id==='account-page') renderAccountPage();
-  if(id==='hidden-staff-page'){ try{ renderHiddenStaffPage(); }catch(e){} }
+  if(id==='hidden-staff-page'){ try{ renderHiddenStaffPage(); }catch(e){ console.error('hidden staff page', e); } }
+  if(id==='public-holiday-page'){ try{ renderPublicHolidayPage(); }catch(e){ console.error('public holiday page', e); } }
   if(id==='unavail-page') { try{ renderUnavailablePage(); }catch(e){ try{ renderUnavailable(); }catch(e2){} } }
   if(id==='account-mgmt-page') renderAccountMgmtPage();
   if(id==='archive-page') renderArchivePage();
@@ -4004,41 +4107,8 @@ function renderMySchedule(){
     var reqs=safeGetJSON('retail_roster_requests_v2',[]);
     var myUsername=(safeGet('repco_username')||'').toLowerCase();
     function findRequestForShift(dateObj, iso, idx){
-      // First check pending - highest priority
-      for(var rr=0;rr<reqs.length;rr++){
-        var r=reqs[rr];
-        if(!r) continue;
-        if(r.username && r.username.toLowerCase()!==myUsername) continue;
-        if(r.status!=='pending') continue;
-        if(r.shiftISO && iso && r.shiftISO===iso) return {req:r, index:rr, status:'pending'};
-        if(r.shiftDate){
-          var sd=r.shiftDate;
-          if(sd===dateObj.date+' '+dateObj.day || sd===dateObj.date || dateObj.date+' '+dateObj.day===sd) return {req:r, index:rr, status:'pending'};
-          if(iso && sd.indexOf(iso)!==-1) return {req:r, index:rr, status:'pending'};
-        }
-        if(r.shiftIdx===idx && r.fortnightId && dateObj.fortnight && r.fortnightId===dateObj.fortnight.id) return {req:r, index:rr, status:'pending'};
-      }
-      // Then check approved within last 14 days - show as green approved and actioned - FIXED for instant update
-      for(var rr=0;rr<reqs.length;rr++){
-        var r=reqs[rr];
-        if(!r) continue;
-        if(r.username && r.username.toLowerCase()!==myUsername) continue;
-        if(r.status!=='approved') continue;
-        var isRecent = true;
-        if(r.approvedTs){
-          isRecent = (Date.now() - r.approvedTs) < 14*24*60*60*1000;
-        } else if(r.ts){
-          isRecent = (Date.now() - r.ts) < 14*24*60*60*1000;
-        }
-        if(!isRecent) continue;
-        if(r.shiftISO && iso && r.shiftISO===iso) return {req:r, index:rr, status:'approved'};
-        if(r.shiftDate){
-          var sd=r.shiftDate;
-          if(sd===dateObj.date+' '+dateObj.day || sd===dateObj.date || dateObj.date+' '+dateObj.day===sd) return {req:r, index:rr, status:'approved'};
-        }
-        if(typeof r.shiftIdx==='number' && r.shiftIdx===idx) return {req:r, index:rr, status:'approved'};
-      }
-      // Then check denied within last 7 days - show as Rejected/Denied (will revert to original) - FIXED for instant update
+      // FIXED: Check denied/approved FIRST so actioned requests take priority over pending - prevents pending showing after deny
+      // Check denied within last 14 days - show as Rejected/Denied (will revert to original) - HIGHEST PRIORITY
       for(var rr=0;rr<reqs.length;rr++){
         var r=reqs[rr];
         if(!r) continue;
@@ -4055,9 +4125,47 @@ function renderMySchedule(){
         if(r.shiftDate){
           var sd=r.shiftDate;
           if(sd===dateObj.date+' '+dateObj.day || sd===dateObj.date || dateObj.date+' '+dateObj.day===sd) return {req:r, index:rr, status:'denied'};
+          if(iso && sd.indexOf(iso)!==-1) return {req:r, index:rr, status:'denied'};
         }
-        // Also match by shiftIdx if available
         if(typeof r.shiftIdx==='number' && r.shiftIdx===idx) return {req:r, index:rr, status:'denied'};
+        if(r.fortnightId && dateObj.fortnight && r.fortnightId===dateObj.fortnight.id && r.shiftIdx===idx) return {req:r, index:rr, status:'denied'};
+      }
+      // Then check approved within last 14 days - show as green approved and actioned
+      for(var rr=0;rr<reqs.length;rr++){
+        var r=reqs[rr];
+        if(!r) continue;
+        if(r.username && r.username.toLowerCase()!==myUsername) continue;
+        if(r.status!=='approved') continue;
+        var isRecent = true;
+        if(r.approvedTs){
+          isRecent = (Date.now() - r.approvedTs) < 14*24*60*60*1000;
+        } else if(r.ts){
+          isRecent = (Date.now() - r.ts) < 14*24*60*60*1000;
+        }
+        if(!isRecent) continue;
+        if(r.shiftISO && iso && r.shiftISO===iso) return {req:r, index:rr, status:'approved'};
+        if(r.shiftDate){
+          var sd=r.shiftDate;
+          if(sd===dateObj.date+' '+dateObj.day || sd===dateObj.date || dateObj.date+' '+dateObj.day===sd) return {req:r, index:rr, status:'approved'};
+          if(iso && sd.indexOf(iso)!==-1) return {req:r, index:rr, status:'approved'};
+        }
+        if(typeof r.shiftIdx==='number' && r.shiftIdx===idx) return {req:r, index:rr, status:'approved'};
+        if(r.fortnightId && dateObj.fortnight && r.fortnightId===dateObj.fortnight.id && r.shiftIdx===idx) return {req:r, index:rr, status:'approved'};
+      }
+      // Finally check pending - lowest priority, so denied/approved shows instead of pending
+      for(var rr=0;rr<reqs.length;rr++){
+        var r=reqs[rr];
+        if(!r) continue;
+        if(r.username && r.username.toLowerCase()!==myUsername) continue;
+        if(r.status!=='pending') continue;
+        if(r.shiftISO && iso && r.shiftISO===iso) return {req:r, index:rr, status:'pending'};
+        if(r.shiftDate){
+          var sd=r.shiftDate;
+          if(sd===dateObj.date+' '+dateObj.day || sd===dateObj.date || dateObj.date+' '+dateObj.day===sd) return {req:r, index:rr, status:'pending'};
+          if(iso && sd.indexOf(iso)!==-1) return {req:r, index:rr, status:'pending'};
+        }
+        if(r.shiftIdx===idx && r.fortnightId && dateObj.fortnight && r.fortnightId===dateObj.fortnight.id) return {req:r, index:rr, status:'pending'};
+        if(typeof r.shiftIdx==='number' && r.shiftIdx===idx) return {req:r, index:rr, status:'pending'};
       }
       return null;
     }
@@ -4611,7 +4719,7 @@ window.addEventListener('storage', function(e){
 
 
 function deleteMyRequest(idx){
-  showCustomConfirm('Delete / Undo Request?', '<div style="font-size:11px">Delete this request?<br><br>If you made an error, you can delete and submit again.<br><br>This will remove the request permanently.</div>', function(confirmed){
+  showCustomConfirm('Delete / Undo Request?', '<div style="font-size:11px">Delete this request?<br><br>If you made an error, you can delete and submit again.<br><br>This will remove the request permanently and sync to admin instantly.</div>', function(confirmed){
     if(!confirmed) return;
     try{
       var reqs=safeGetJSON('retail_roster_requests_v2',[]);
@@ -4623,14 +4731,34 @@ function deleteMyRequest(idx){
           toast('You can only delete your own requests');
           return;
         }
+        var deletedId=r.id;
+        var deletedShift=r.shiftDate||r.date||'';
         reqs.splice(idx,1);
         safeSetJSON('retail_roster_requests_v2', reqs);
-        renderRequests(); try{ renderMySchedule(); }catch(e){} try{ updateRequestsBadge(); }catch(e){} try{ debouncedCloudSave(); cloudSave(); }catch(e){}
+        try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
+        try{ localStorage.setItem('retail_roster_deleted_'+deletedId, String(Date.now())); }catch(e){}
+        renderRequests(); try{ renderMySchedule(); }catch(e){} try{ updateRequestsBadge(); }catch(e){}
+        // Immediate cloud sync for deletion - admin will see it removed instantly
+        try{
+          if(typeof debouncedCloudSave==='function') debouncedCloudSave();
+          if(typeof cloudSave==='function') cloudSave();
+          var state=null;
+          if(typeof getAllState==='function') state=getAllState();
+          if(state){
+            safeSet('repco_cloud_ts', String(state._ts||Date.now()));
+            if(typeof db!=='undefined' && db && db.ref){
+              db.ref('repco_state').set(state).then(function(){
+                console.log('Deleted request synced to cloud - admin will see removal, id:', deletedId);
+              });
+            } else if(typeof FIREBASE_DB_URL!=='undefined'){
+              fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
+            }
+          }
+        }catch(e){ console.error('Cloud sync error on delete', e); }
         updateRequestsBadge();
-        try{ debouncedCloudSave(); }catch(e){}
-        toast('Request deleted / undone');
+        toast('Request deleted - synced to admin: '+deletedShift);
       }
-    }catch(e){ toast('Error: '+e.message); }
+    }catch(e){ toast('Error: '+e.message); console.error(e); }
   });
 }
 
