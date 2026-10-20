@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_DOUBLE_ASYNC_V91";
+const BUILD_ID="20261022690000_FIX_SYNTAX_3_V92";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -1043,12 +1043,8 @@ async function cloudLoad(){
     }catch(e){ console.log('requests_v2 REST poll error', e.message); }
   },3000);
 }
-,2000);
-l(async function(){
-}catch(e){}
-  },3000);
 
-}
+
 
 async function cloudSave(){
   if(suppressCloudSave) return;
