@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_RESUBMIT_V114";
+const BUILD_ID="20261022690000_FIX_REVERT_V115";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -2060,6 +2060,78 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
             }
           }
           safeSetJSON('retail_roster_byFortnight_v1',fns);
+          
+          // V115: If admin manually edits a shift that had an approved request, revert approved to normal
+          try{
+            var allReqs=safeGetJSON('retail_roster_requests_v2',[]);
+            var hadApprovedRevert=false;
+            var dateObj=cur.dates[colIdx];
+            var dateStr=dateObj?dateObj.date:'';
+            var isoStr=dateObj?dateObj.iso:'';
+            for(var ri=0;ri<allReqs.length;ri++){
+              var rq=allReqs[ri];
+              if(!rq) continue;
+              if(rq.status!=='approved') continue;
+              // Match staff by username -> staff name
+              var match=false;
+              if(rq.username){
+                var uname=rq.username.toLowerCase();
+                var first=(staff.firstName||'').toLowerCase();
+                var last=(staff.lastName||'').toLowerCase();
+                var full=(first+' '+last).toLowerCase();
+                if(uname===first || uname===last || uname===full || full.indexOf(uname)!==-1 || uname.indexOf(first)!==-1){
+                  match=true;
+                }
+                try{
+                  var mapped=mapUsernameToStaffKey(rq.username);
+                  if(mapped && mapped.firstName && mapped.firstName.toLowerCase()===first){
+                    if(!mapped.lastName || mapped.lastName.toLowerCase()===last) match=true;
+                  }
+                }catch(e){}
+              }
+              if(!match) continue;
+              // Match date by idx or date string or iso
+              var dateMatch=false;
+              if(typeof rq.shiftIdx==='number' && rq.shiftIdx===colIdx) dateMatch=true;
+              if(rq.shiftDate && dateStr && rq.shiftDate.indexOf(dateStr)!==-1) dateMatch=true;
+              if(rq.shiftISO && isoStr && rq.shiftISO===isoStr) dateMatch=true;
+              if(rq.dates && Array.isArray(rq.dates)){
+                for(var di=0;di<rq.dates.length;di++){
+                  if(rq.dates[di] && dateStr && rq.dates[di].indexOf(dateStr)!==-1) dateMatch=true;
+                }
+              }
+              if(!dateMatch) continue;
+              // This approved request matches the manually edited cell - revert it
+              console.log('V115: Admin manually edited approved request', rq.id, 'for', staff.firstName, dateStr, 'new shift', actualShift, '- reverting approved to allow normal display');
+              // Option: Remove the approved request so My Schedule shows normal adjusted times
+              // Keep it as history but mark as superseded by admin edit
+              rq.status='superseded';
+              rq.supersededTs=Date.now();
+              rq.supersededBy=safeGet('repco_username')||'admin';
+              rq.supersededNote='Admin manually adjusted roster from '+rq.newShift+' to '+actualShift+' - reverted to normal';
+              rq.readByStaff=false;
+              hadApprovedRevert=true;
+            }
+            if(hadApprovedRevert){
+              safeSetJSON('retail_roster_requests_v2', allReqs);
+              try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
+              // Sync to cloud
+              try{
+                var state2=getAllState();
+                state2._ts=Date.now();
+                safeSet('repco_cloud_ts', String(state2._ts));
+                if(typeof db!=='undefined' && db && db.ref){
+                  db.ref('repco_state').set(state2);
+                } else {
+                  fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state2)});
+                }
+                fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(allReqs),mode:'cors'}).catch(function(){});
+              }catch(e){}
+              toast('Approved request reverted - '+staff.firstName+' '+dateStr+' now shows normal '+actualShift);
+              try{ renderMySchedule(); }catch(e){}
+            }
+          }catch(e){ console.error('V115 revert approved error', e); }
+          
           clearEditDraft();
           renderRosterSafe();
           var msg='Saved';
@@ -2067,7 +2139,7 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
           else if(isAB) msg='Marked AB';
           else if(isNA) msg='Marked unavailable';
           else if(newVal===staff.originalShifts[colIdx]) msg='Restored original';
-          toast(msg+' - '+staff.firstName+' '+cur.dates[colIdx].date);
+          if(!hadApprovedRevert) toast(msg+' - '+staff.firstName+' '+cur.dates[colIdx].date);
           try{ debouncedCloudSave(); }catch(e){}
           try{ if(typeof updateUndoButton==='function') updateUndoButton(); }catch(e){}
         }catch(e){
@@ -4895,6 +4967,7 @@ function renderMySchedule(){
       for(var rr=0;rr<reqs.length;rr++){
         var r=reqs[rr];
         if(!r) continue;
+        if(r.status==='superseded') continue; // V115: Ignore superseded (admin manually edited after approval)
         if(r.username && r.username.toLowerCase()!==myUsername) continue;
         var rDateKey=extractDateKey(r.shiftDate||'')||extractDateKey(r.shiftISO||'');
         var objDateKey=extractDateKey(dateObj.date||'')||dateObj.date;
