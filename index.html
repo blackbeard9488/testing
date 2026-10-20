@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_TRY_CATCH_2_V95";
+const BUILD_ID="20261022690000_FIX_MY_SCHED_JSONSTORE_V96";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -4785,14 +4785,6 @@ function renderMySchedule(){
           console.log('requests_v2 cors failed, trying no-cors', e.message);
           try{ fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json?_t='+Date.now(),{cache:'no-store', mode:'no-cors'}); }catch(e2){}
         });
-        // Check jsonstore fallback - always works even if Firebase blocks
-          if(!res.ok) throw new Error('jsonstore failed');
-          return res.json();
-        }).then(function(jData){
-          if(!jData) return;
-          var cr=jData.request || jData;
-          if(!cr || !cr.id) return;
-          overwritePendingWithDenied([cr], 'jsonstore');
         // Also check repco_state for denied
         fetch(FIREBASE_DB_URL+'/repco_state.json?_t='+Date.now(),{cache:'no-store', mode:'cors'}).then(function(res){
           if(!res.ok) throw new Error('repco_state failed');
