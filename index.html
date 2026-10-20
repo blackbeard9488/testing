@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_INSTANT_V120";
+const BUILD_ID="20261022690000_REVERT_ORIGINAL_V121";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -2088,17 +2088,18 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
           }
           safeSetJSON('retail_roster_byFortnight_v1',fns);
           
-          // V115: If admin manually edits a shift that had an approved request, revert approved to normal
+          // V115/V121: If admin manually edits a shift that had an approved/denied request, revert to ORIGINAL as if never made
           try{
             var allReqs=safeGetJSON('retail_roster_requests_v2',[]);
             var hadApprovedRevert=false;
             var dateObj=cur.dates[colIdx];
             var dateStr=dateObj?dateObj.date:'';
             var isoStr=dateObj?dateObj.iso:'';
+            var originalShiftToRestore=null;
             for(var ri=0;ri<allReqs.length;ri++){
               var rq=allReqs[ri];
               if(!rq) continue;
-              if(rq.status!=='approved') continue;
+              if(rq.status!=='approved' && rq.status!=='denied' && rq.status!=='rejected') continue;
               // Match staff by username -> staff name
               var match=false;
               if(rq.username){
@@ -2128,18 +2129,48 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
                 }
               }
               if(!dateMatch) continue;
-              // This approved request matches the manually edited cell - revert it
-              console.log('V115: Admin manually edited approved request', rq.id, 'for', staff.firstName, dateStr, 'new shift', actualShift, '- reverting approved to allow normal display');
-              // Option: Remove the approved request so My Schedule shows normal adjusted times
-              // Keep it as history but mark as superseded by admin edit
+              // This approved/denied request matches the manually edited cell - revert to ORIGINAL as if never made
+              console.log('V121: Admin manually edited '+rq.status+' request', rq.id, 'for', staff.firstName, dateStr, ' - reverting to ORIGINAL as if never made');
+              // Save original shift to restore
+              if(rq.oldShift) originalShiftToRestore=rq.oldShift;
+              else if(staff.originalShifts && staff.originalShifts[colIdx]) originalShiftToRestore=staff.originalShifts[colIdx];
+              else if(targetStaff && targetStaff.originalShifts && targetStaff.originalShifts[colIdx]) originalShiftToRestore=targetStaff.originalShifts[colIdx];
+              // Mark as superseded - history kept but My Schedule will show normal original
               rq.status='superseded';
               rq.supersededTs=Date.now();
               rq.supersededBy=safeGet('repco_username')||'admin';
-              rq.supersededNote='Admin manually adjusted roster from '+rq.newShift+' to '+actualShift+' - reverted to normal';
+              rq.supersededNote='Admin edited roster cell - reverted to original '+ (originalShiftToRestore||'state') +' as if request never made - was '+rq.newShift;
               rq.readByStaff=false;
               hadApprovedRevert=true;
             }
             if(hadApprovedRevert){
+              // V121: Restore ORIGINAL shift on roster as if request never made
+              if(originalShiftToRestore){
+                console.log('V121: Restoring original shift', originalShiftToRestore, 'for', staff.firstName, dateStr);
+                staff.shifts[colIdx]=originalShiftToRestore;
+                if(targetStaff) targetStaff.shifts[colIdx]=originalShiftToRestore;
+                // Clear originalShifts, green, absent flags - as if never made
+                if(staff.originalShifts) delete staff.originalShifts[colIdx];
+                if(targetStaff && targetStaff.originalShifts) delete targetStaff.originalShifts[colIdx];
+                if(staff.cellGreen) staff.cellGreen[colIdx]=false;
+                if(targetStaff && targetStaff.cellGreen) targetStaff.cellGreen[colIdx]=false;
+                if(staff.absentApproved) staff.absentApproved[colIdx]=false;
+                if(targetStaff && targetStaff.absentApproved) targetStaff.absentApproved[colIdx]=false;
+                // Update fns array
+                try{
+                  var fns2=safeGetJSON('retail_roster_byFortnight_v1',[]);
+                  var fnIdx2=fns2.findIndex(function(f){return f.id===cur.id;});
+                  if(fnIdx2!==-1 && fns2[fnIdx2].staff && fns2[fnIdx2].staff[rowIdx]){
+                    fns2[fnIdx2].staff[rowIdx].shifts[colIdx]=originalShiftToRestore;
+                    if(fns2[fnIdx2].staff[rowIdx].originalShifts) delete fns2[fnIdx2].staff[rowIdx].originalShifts[colIdx];
+                    if(fns2[fnIdx2].staff[rowIdx].cellGreen) fns2[fnIdx2].staff[rowIdx].cellGreen[colIdx]=false;
+                    if(fns2[fnIdx2].staff[rowIdx].absentApproved) fns2[fnIdx2].staff[rowIdx].absentApproved[colIdx]=false;
+                    safeSetJSON('retail_roster_byFortnight_v1', fns2);
+                    fns=fns2; // use updated for cloud push
+                  }
+                }catch(e){ console.log('V121 restore fns error', e); }
+                actualShift=originalShiftToRestore; // for toast and cloud push
+              }
               safeSetJSON('retail_roster_requests_v2', allReqs);
               try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
               // Sync to cloud
@@ -2153,11 +2184,20 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
                   fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state2)});
                 }
                 fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(allReqs),mode:'cors'}).catch(function(){});
+                // Also push roster directly for instant My Schedule
+                try{ fetch(FIREBASE_DB_URL+'/retail_roster_byFortnight_v1.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(fns),mode:'cors'}).catch(function(){}); }catch(e){}
+                // Broadcast instant update
+                try{
+                  if(typeof BroadcastChannel!=='undefined'){
+                    var bc2=new BroadcastChannel('repco_roster_sync');
+                    bc2.postMessage({type:'roster_updated', ts:state2._ts, fortnightId:cur.id, staff:staff.firstName+' '+staff.lastName, date:dateStr, shift:actualShift, revertedToOriginal:true});
+                  }
+                }catch(e){}
               }catch(e){}
-              toast('Approved request reverted - '+staff.firstName+' '+dateStr+' now shows normal '+actualShift);
+              toast('Reverted to original - '+staff.firstName+' '+dateStr+' now '+actualShift+' as if never requested');
               try{ renderMySchedule(); }catch(e){}
             }
-          }catch(e){ console.error('V115 revert approved error', e); }
+          }catch(e){ console.error('V121 revert error', e); }
           
           clearEditDraft();
           // V120: Force instant My Schedule update - multiple times for reliability
