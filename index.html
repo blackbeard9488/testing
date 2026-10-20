@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_REVERT_ORIGINAL_V121";
+const BUILD_ID="20261022690000_RE_REQUEST_PENDING_V124";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -1417,30 +1417,27 @@ function populateFortnightSelect(){
   var now=Date.now();
   var cur=getCurrentFortnight();
   var curId;
-  var forceCurrent=false;
-  if(cur && storedId){
-    var storedFn=sorted.find(function(f){ return f.id===storedId; });
-    if(storedFn && storedFn.dates && storedFn.dates[0]){
-      var todayISO=getISO();
-      if(cur.dates && cur.dates[0] && todayISO >= cur.dates[0].iso && todayISO <= cur.dates[cur.dates.length-1].iso){
-        if(storedFn.dates[0].iso > todayISO){
-          if(!lastManualTs || (now-parseInt(lastManualTs,10))>2*60*1000){
-            forceCurrent=true;
-          }
+  // V122: Always default to roster containing today, mark it with indicator
+  var todayISO=getISO();
+  if(cur){
+    // If no recent manual select (<2min), always show current
+    if(!lastManualTs || (now-parseInt(lastManualTs,10))>2*60*1000){
+      curId=cur.id;
+    } else {
+      // Recent manual - respect it unless it's not containing today and today roster exists
+      var storedFn=sorted.find(function(f){ return f.id===storedId; });
+      if(storedFn && storedFn.dates){
+        if(todayISO < storedFn.dates[0].iso || todayISO > storedFn.dates[storedFn.dates.length-1].iso){
+          curId=cur.id; // stored doesn't contain today, force current
+        } else {
+          curId=storedId;
         }
+      } else {
+        curId=cur.id;
       }
     }
-  }
-  if(forceCurrent && cur){
-    curId=cur.id;
-  } else if(storedId && sorted.find(function(f){ return f.id===storedId; })){
-    if(lastManualTs && (now-parseInt(lastManualTs,10))<2*60*1000){
-      curId=storedId;
-    } else {
-      curId=cur?cur.id:storedId||sorted[0].id;
-    }
   } else {
-    curId=cur?cur.id:(storedId||sorted[0].id);
+    curId=storedId||sorted[0].id;
   }
   sel.value=curId;
   safeSet('retail_roster_currentFortnightId',curId);
@@ -1622,6 +1619,31 @@ function renderRosterSafe(){
   try{ applyAutoGStatus(); }catch(e){}
 
   var cur=getSelectedFortnight();if(!cur) cur=getCurrentFortnight(); if(!cur) return; 
+  // V122: Indicator when viewing roster containing today
+  try{
+    var todayISO2=getISO();
+    var isCurrentRoster=cur.dates && cur.dates[0] && cur.dates[cur.dates.length-1] && todayISO2>=cur.dates[0].iso && todayISO2<=cur.dates[cur.dates.length-1].iso;
+    var indicatorEl=document.getElementById('current-roster-indicator');
+    if(!indicatorEl){
+      var mountParent=document.getElementById('roster-mount');
+      if(mountParent && mountParent.parentNode){
+        var banner=document.createElement('div');
+        banner.id='current-roster-indicator';
+        banner.style.cssText='background:#111;color:#fff;border:3px solid #E30613;padding:8px 12px;border-radius:9999px;margin-bottom:10px;font-weight:900;font-size:11px;text-align:center;';
+        mountParent.parentNode.insertBefore(banner, mountParent);
+        indicatorEl=banner;
+      }
+    }
+    if(indicatorEl){
+      if(isCurrentRoster){
+        var todayFmt=new Date().toLocaleDateString('en-AU',{day:'2-digit',month:'2-digit'});
+        indicatorEl.style.display='block';
+        indicatorEl.innerHTML='📅 CURRENT ROSTER - Contains today '+todayFmt+' ('+cur.label+') - Today is '+todayISO2;
+      } else {
+        indicatorEl.style.display='none';
+      }
+    }
+  }catch(e){ console.log('V122 indicator error', e); }
   var mount=document.getElementById('roster-mount'); var curU=safeGet('repco_username')||''; var isMgr=isManagerRole(getActualRole());
   var todayISO=getISO(); var todayDateObj=new Date(todayISO); var todayStr=String(todayDateObj.getDate()).padStart(2,'0')+'/'+String(todayDateObj.getMonth()+1).padStart(2,'0'); var todayIdx=cur.dates.findIndex(function(d){ return d.iso===todayISO; }); if(todayIdx===-1) todayIdx=cur.dates.findIndex(function(d){ return d.date===todayStr; });
   function isWeekend(day){return day==='SAT'||day==='SUN'} function isOwn(st){return st.firstName && (st.firstName.toLowerCase()===curU.toLowerCase()||(st.firstName+st.lastName).toLowerCase()===curU.toLowerCase()|| (st.lastName && st.lastName.toLowerCase()===curU.toLowerCase()))}
@@ -2131,10 +2153,29 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
               if(!dateMatch) continue;
               // This approved/denied request matches the manually edited cell - revert to ORIGINAL as if never made
               console.log('V121: Admin manually edited '+rq.status+' request', rq.id, 'for', staff.firstName, dateStr, ' - reverting to ORIGINAL as if never made');
-              // Save original shift to restore
+              // Save original shift to restore - try all sources
               if(rq.oldShift) originalShiftToRestore=rq.oldShift;
-              else if(staff.originalShifts && staff.originalShifts[colIdx]) originalShiftToRestore=staff.originalShifts[colIdx];
-              else if(targetStaff && targetStaff.originalShifts && targetStaff.originalShifts[colIdx]) originalShiftToRestore=targetStaff.originalShifts[colIdx];
+              else if(staff.originalShifts && staff.originalShifts[colIdx]!=null) originalShiftToRestore=staff.originalShifts[colIdx];
+              else if(targetStaff && targetStaff.originalShifts && targetStaff.originalShifts[colIdx]!=null) originalShiftToRestore=targetStaff.originalShifts[colIdx];
+              else {
+                // Fallback: try to find original from fns backup or from request dates
+                try{
+                  var fnsTmp=safeGetJSON('retail_roster_byFortnight_v1',[]);
+                  var fnTmp=fnsTmp.find(function(f){return f.id===cur.id;});
+                  if(fnTmp && fnTmp.staff && fnTmp.staff[rowIdx] && fnTmp.staff[rowIdx].originalShifts && fnTmp.staff[rowIdx].originalShifts[colIdx]!=null){
+                    originalShiftToRestore=fnTmp.staff[rowIdx].originalShifts[colIdx];
+                  }
+                }catch(e){}
+              }
+              // If still null and admin typed empty, use that as signal to restore
+              if(!originalShiftToRestore && !newVal){
+                // Admin cleared cell - try to get from any backup
+                try{
+                  if(staff.originalShifts && Object.keys(staff.originalShifts).length>0){
+                    originalShiftToRestore=staff.originalShifts[colIdx]||staff.originalShifts[String(colIdx)]||null;
+                  }
+                }catch(e){}
+              }
               // Mark as superseded - history kept but My Schedule will show normal original
               rq.status='superseded';
               rq.supersededTs=Date.now();
@@ -2144,33 +2185,36 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
               hadApprovedRevert=true;
             }
             if(hadApprovedRevert){
-              // V121: Restore ORIGINAL shift on roster as if request never made
-              if(originalShiftToRestore){
-                console.log('V121: Restoring original shift', originalShiftToRestore, 'for', staff.firstName, dateStr);
-                staff.shifts[colIdx]=originalShiftToRestore;
-                if(targetStaff) targetStaff.shifts[colIdx]=originalShiftToRestore;
-                // Clear originalShifts, green, absent flags - as if never made
-                if(staff.originalShifts) delete staff.originalShifts[colIdx];
-                if(targetStaff && targetStaff.originalShifts) delete targetStaff.originalShifts[colIdx];
-                if(staff.cellGreen) staff.cellGreen[colIdx]=false;
-                if(targetStaff && targetStaff.cellGreen) targetStaff.cellGreen[colIdx]=false;
-                if(staff.absentApproved) staff.absentApproved[colIdx]=false;
-                if(targetStaff && targetStaff.absentApproved) targetStaff.absentApproved[colIdx]=false;
-                // Update fns array
-                try{
-                  var fns2=safeGetJSON('retail_roster_byFortnight_v1',[]);
-                  var fnIdx2=fns2.findIndex(function(f){return f.id===cur.id;});
-                  if(fnIdx2!==-1 && fns2[fnIdx2].staff && fns2[fnIdx2].staff[rowIdx]){
-                    fns2[fnIdx2].staff[rowIdx].shifts[colIdx]=originalShiftToRestore;
-                    if(fns2[fnIdx2].staff[rowIdx].originalShifts) delete fns2[fnIdx2].staff[rowIdx].originalShifts[colIdx];
-                    if(fns2[fnIdx2].staff[rowIdx].cellGreen) fns2[fnIdx2].staff[rowIdx].cellGreen[colIdx]=false;
-                    if(fns2[fnIdx2].staff[rowIdx].absentApproved) fns2[fnIdx2].staff[rowIdx].absentApproved[colIdx]=false;
-                    safeSetJSON('retail_roster_byFortnight_v1', fns2);
-                    fns=fns2; // use updated for cloud push
-                  }
-                }catch(e){ console.log('V121 restore fns error', e); }
-                actualShift=originalShiftToRestore; // for toast and cloud push
-              }
+              // V121/V122: Restore ORIGINAL shift on roster as if request never made, or keep adjusted if no original
+              var shiftToUse=originalShiftToRestore||actualShift;
+              console.log('V122: Reverting, original', originalShiftToRestore, 'adjusted', actualShift, 'using', shiftToUse, 'for', staff.firstName, dateStr);
+              staff.shifts[colIdx]=shiftToUse;
+              if(targetStaff) targetStaff.shifts[colIdx]=shiftToUse;
+              // Clear originalShifts, green, absent flags - as if never made - THIS IS KEY FOR MY SCHEDULE TO SHOW NORMAL
+              if(staff.originalShifts) { try{ delete staff.originalShifts[colIdx]; delete staff.originalShifts[String(colIdx)]; }catch(e){ staff.originalShifts[colIdx]=undefined; } }
+              if(targetStaff && targetStaff.originalShifts) { try{ delete targetStaff.originalShifts[colIdx]; delete targetStaff.originalShifts[String(colIdx)]; }catch(e){ targetStaff.originalShifts[colIdx]=undefined; } }
+              if(staff.cellGreen) staff.cellGreen[colIdx]=false;
+              if(targetStaff && targetStaff.cellGreen) targetStaff.cellGreen[colIdx]=false;
+              if(staff.cellG) staff.cellG[colIdx]=false;
+              if(targetStaff && targetStaff.cellG) targetStaff.cellG[colIdx]=false;
+              if(staff.absentApproved) staff.absentApproved[colIdx]=false;
+              if(targetStaff && targetStaff.absentApproved) targetStaff.absentApproved[colIdx]=false;
+              // Update fns array - ensure My Schedule sees normal
+              try{
+                var fns2=safeGetJSON('retail_roster_byFortnight_v1',[]);
+                var fnIdx2=fns2.findIndex(function(f){return f.id===cur.id;});
+                if(fnIdx2!==-1 && fns2[fnIdx2].staff && fns2[fnIdx2].staff[rowIdx]){
+                  fns2[fnIdx2].staff[rowIdx].shifts[colIdx]=shiftToUse;
+                  if(fns2[fnIdx2].staff[rowIdx].originalShifts) { try{ delete fns2[fnIdx2].staff[rowIdx].originalShifts[colIdx]; delete fns2[fnIdx2].staff[rowIdx].originalShifts[String(colIdx)]; }catch(e){} }
+                  if(fns2[fnIdx2].staff[rowIdx].cellGreen) fns2[fnIdx2].staff[rowIdx].cellGreen[colIdx]=false;
+                  if(fns2[fnIdx2].staff[rowIdx].cellG) fns2[fnIdx2].staff[rowIdx].cellG[colIdx]=false;
+                  if(fns2[fnIdx2].staff[rowIdx].absentApproved) fns2[fnIdx2].staff[rowIdx].absentApproved[colIdx]=false;
+                  safeSetJSON('retail_roster_byFortnight_v1', fns2);
+                  fns=fns2; // use updated for cloud push
+                }
+              }catch(e){ console.log('V122 restore fns error', e); }
+              actualShift=shiftToUse; // for toast and cloud push
+              
               safeSetJSON('retail_roster_requests_v2', allReqs);
               try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
               // Sync to cloud
@@ -2469,48 +2513,33 @@ function showMain(){
     if(repco){ repco.classList.add('show'); repco.style.display='block'; }
     var header=document.getElementById('global-header');
     if(header){ header.style.display='flex'; header.classList.add('show'); }
+    // V122: Always default to roster containing today (if today is 21/10 show 21/10-03/11)
     var cur=getCurrentFortnight();
     var sel=document.getElementById('fortnight-select');
     var lastManualTs=safeGet('repco_last_manual_select_ts');
     var now=Date.now();
     var storedId=safeGet('retail_roster_currentFortnightId');
-    var forceCurrent=false;
     var todayISO=getISO();
+    // If no manual select in last 2 min, force current fortnight containing today
     if(cur){
-      if(cur.dates && cur.dates[0] && cur.dates[cur.dates.length-1]){
-        if(todayISO >= cur.dates[0].iso && todayISO <= cur.dates[cur.dates.length-1].iso){
-          var storedFn=fns.find(function(f){ return f.id===storedId; });
-          if(storedFn && storedFn.dates && storedFn.dates[0]){
-            if(storedFn.dates[0].iso > todayISO || storedFn.dates[storedFn.dates.length-1].iso < todayISO){
-              if(!lastManualTs || (now-parseInt(lastManualTs,10))>2*60*1000){
-                forceCurrent=true;
-              }
-            }
-          } else if(storedId !== cur.id){
-            if(!lastManualTs || (now-parseInt(lastManualTs,10))>2*60*1000){
-              forceCurrent=true;
-            }
+      var shouldForceCurrent=false;
+      if(!lastManualTs || (now-parseInt(lastManualTs,10))>2*60*1000){
+        shouldForceCurrent=true;
+      } else {
+        // Even with recent manual, if stored is not containing today, force current
+        var storedFn=fns.find(function(f){ return f.id===storedId; });
+        if(storedFn && storedFn.dates){
+          if(todayISO < storedFn.dates[0].iso || todayISO > storedFn.dates[storedFn.dates.length-1].iso){
+            shouldForceCurrent=true;
           }
+        } else if(storedId !== cur.id){
+          shouldForceCurrent=true;
         }
       }
-    }
-    if(cur){
-      if(sel){
-        var shouldUpdate=false;
-        if(forceCurrent){
-          shouldUpdate=true;
-        } else if(sel.value!==cur.id){
-          var lastSelTs=safeGet('repco_last_manual_select_ts');
-          if(!lastSelTs || (now-parseInt(lastSelTs,10))>5*60*1000){
-            shouldUpdate=true;
-          }
-        }
-        if(shouldUpdate){
-          sel.value=cur.id;
-          safeSet('retail_roster_currentFortnightId', cur.id);
-        }
-      } else if(forceCurrent){
+      if(shouldForceCurrent){
+        if(sel) sel.value=cur.id;
         safeSet('retail_roster_currentFortnightId', cur.id);
+        console.log('V122: Defaulting to current roster containing today', cur.label, todayISO);
       }
     }
     renderRosterSafe();
@@ -5396,11 +5425,11 @@ function renderMySchedule(){
       if(found){
         var reqData=found.req; var reqIdx=found.index; var reqStatus=found.status||reqData.status||'pending';
         if(reqStatus==='approved'){
-          // Approved - green, no , show as actioned
-          htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111;"><div style="font-weight:900;font-size:12px;color:#111">CURRENT SHIFT - APPROVED & ACTIONED ✓</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+phCurrIcon+currentShift.date.day+' '+currentShift.date.date+(phCurr?' 🎉':'')+' - '+fmt(reqData.oldShift||'')+' → '+fmt(reqData.newShift||currentShift.shift)+'</div><div style="font-size:11px">Reason: '+(reqData.reason||'')+'<br>Status: <b style="color:#111;background:#fff;border-radius:9999px;padding:2px 6px">APPROVED by '+(reqData.approvedBy||'admin')+'</b> - Shift updated</div><div style="margin-top:8px;font-size:10px;color:#666">This request has been approved and your roster has been updated. The green colour shows it\'s been actioned.</div></div>';
+          // Approved - green, now tappable to request again (fresh request)
+          htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111;cursor:pointer"><div style="font-weight:900;font-size:12px;color:#111">CURRENT SHIFT - APPROVED & ACTIONED ✓</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+phCurrIcon+currentShift.date.day+' '+currentShift.date.date+(phCurr?' 🎉':'')+' - '+fmt(reqData.oldShift||'')+' → '+fmt(reqData.newShift||currentShift.shift)+'</div><div style="font-size:11px">Reason: '+(reqData.reason||'')+'<br>Status: <b style="color:#111;background:#fff;border-radius:9999px;padding:2px 6px">APPROVED by '+(reqData.approvedBy||'admin')+'</b> - Shift updated</div><div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"><button onclick="requestShiftCorrectionFromSchedule('+currentShift.idx+', \''+currentShift.date.date+' '+currentShift.date.day+'\', \''+currentShift.shift.replace(/\'/g, "\\'")+ '\')" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">TAP TO REQUEST NEW CHANGE</button><button onclick="deleteMyRequest('+reqIdx+')" style="background:#fff;color:#111;border:2px solid #111;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">DISMISS</button></div><div style="margin-top:6px;font-size:9px;color:#666">Tap above to submit a fresh request for this shift - will create new PENDING request</div></div>';
         } else if(reqStatus==='denied'){
-          // Denied - grey, no , revert to original
-          htmlStr+='<div class="card" style="background:#E5E5E5;border:2px solid #111;"><div style="font-weight:900;font-size:12px;color:#E30613">CURRENT SHIFT - REJECTED / DENIED</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+phCurrIcon+currentShift.date.day+' '+currentShift.date.date+(phCurr?' 🎉':'')+' - '+fmt(currentShift.shift)+phCurrBadge+'</div><div style="font-size:11px">Your request to change to '+(reqData.newShift||'')+' was <b>REJECTED / DENIED</b><br>Reason: '+(reqData.reason||'')+'<br>Status: <b style="color:#E30613">DENIED by '+(reqData.deniedBy||'admin')+'</b> - Reverted to original</div><div style="margin-top:8px;display:flex;gap:6px"><button onclick="deleteMyRequest('+reqIdx+')" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">ACKNOWLEDGE / DISMISS</button></div></div>';
+          // Denied - grey, now tappable to request again
+          htmlStr+='<div class="card" style="background:#E5E5E5;border:2px solid #111;"><div style="font-weight:900;font-size:12px;color:#E30613">CURRENT SHIFT - REJECTED / DENIED</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+phCurrIcon+currentShift.date.day+' '+currentShift.date.date+(phCurr?' 🎉':'')+' - '+fmt(currentShift.shift)+phCurrBadge+'</div><div style="font-size:11px">Your request to change to '+(reqData.newShift||'')+' was <b>REJECTED / DENIED</b><br>Reason: '+(reqData.reason||'')+'<br>Status: <b style="color:#E30613">DENIED by '+(reqData.deniedBy||'admin')+'</b> - Reverted to original</div><div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"><button onclick="requestShiftCorrectionFromSchedule('+currentShift.idx+', \''+currentShift.date.date+' '+currentShift.date.day+'\', \''+currentShift.shift.replace(/\'/g, "\\'")+ '\')" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">REQUEST AGAIN - NEW REQUEST</button><button onclick="deleteMyRequest('+reqIdx+')" style="background:#fff;color:#111;border:2px solid #111;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">DISMISS</button></div><div style="margin-top:4px;font-size:9px;color:#666">Denied? Tap to submit fresh PENDING request</div></div>';
         } else {
           // Pending - yellow, NO PULSE (as requested)
           htmlStr+='<div class="card" style="background:#FFEB3B;border:3px solid #E30613;"><div style="font-weight:900;font-size:12px;color:#E30613">CURRENT SHIFT - PENDING APPROVAL</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+phCurrIcon+currentShift.date.day+' '+currentShift.date.date+(phCurr?' 🎉':'')+' - '+fmt(currentShift.shift)+phCurrBadge+' -> '+fmt(reqData.newShift)+'</div><div style="font-size:11px">Reason: '+(reqData.reason||'')+'<br>Status: <b style="color:#E30613">PENDING</b> - Awaiting admin</div><div style="margin-top:8px;display:flex;gap:6px"><button onclick="editMyRequest('+reqIdx+')" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">EDIT REQUEST</button><button onclick="deleteMyRequest('+reqIdx+')" style="background:#E30613;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">CANCEL REQUEST</button></div></div>';
@@ -5430,14 +5459,17 @@ function renderMySchedule(){
         if(foundU){
           var reqU=foundU.req; var reqIdx=foundU.index; var reqStatus=foundU.status||reqU.status||'pending';
           if(reqStatus==='approved'){
-            htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111;"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(reqU.oldShift||'')+' → <b>'+fmt(reqU.newShift||u.shift)+'</b><br><span style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">APPROVED & ACTIONED ✓</span><br><small>Approved by '+(reqU.approvedBy||'admin')+'</small></div>';
+            // V123: Approved now tappable for fresh request - only switches to pending when new request submitted
+            htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111;"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(reqU.oldShift||'')+' → <b>'+fmt(reqU.newShift||u.shift)+'</b><br><span style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">APPROVED & ACTIONED ✓</span><br><small>Approved by '+(reqU.approvedBy||'admin')+'</small><div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap"><button onclick="requestShiftCorrectionFromSchedule('+u.idx+', \''+u.date.date+' '+u.date.day+'\', \''+u.shift.replace(/\'/g, "\\'")+ '\')" style="background:#111;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">TAP FOR NEW REQUEST</button><button onclick="deleteMyRequest('+reqIdx+')" style="background:#fff;color:#111;border:1px solid #111;border-radius:9999px;padding:3px 6px;font-size:8px">DISMISS</button></div><div style="margin-top:4px;font-size:8px;color:#666">Approved? Tap to submit fresh PENDING request - only then switches to pending</div></div>';
           } else if(reqStatus==='denied'){
-            htmlStr+='<div class="card" style="background:#E5E5E5;border:2px solid #111;"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+' <span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">REJECTED / DENIED</span><br><span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">REJECTED / DENIED</span> - Reverted to original<br><small>Request for '+fmt(reqU.newShift||'')+' <b>REJECTED / DENIED</b></small><div style="margin-top:6px"><button onclick="deleteMyRequest('+reqIdx+')" style="background:#111;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">DISMISS</button></div></div>';
+            // V123: Denied now tappable for fresh request - only switches to pending when new request submitted
+            htmlStr+='<div class="card" style="background:#E5E5E5;border:2px solid #111;"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+' <span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">REJECTED / DENIED</span> - Reverted to original<br><small>Request for '+fmt(reqU.newShift||'')+' <b>DENIED</b></small><div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap"><button onclick="requestShiftCorrectionFromSchedule('+u.idx+', \''+u.date.date+' '+u.date.day+'\', \''+u.shift.replace(/\'/g, "\\'")+ '\')" style="background:#111;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">REQUEST AGAIN</button><button onclick="deleteMyRequest('+reqIdx+')" style="background:#fff;color:#111;border:1px solid #111;border-radius:9999px;padding:3px 6px;font-size:8px">DISMISS</button></div><div style="margin-top:4px;font-size:8px;color:#666">Denied? Tap to submit fresh PENDING - only then switches</div></div>';
           } else {
             htmlStr+='<div class="card" style="background:#FFEB3B;border:3px solid #E30613;"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+' -> <b style="color:#E30613">'+fmt(reqU.newShift)+'</b><br><span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">PENDING APPROVAL</span><br><small>Reason: '+(reqU.reason||'')+'</small><div style="margin-top:6px;display:flex;gap:6px"><button onclick="editMyRequest('+reqIdx+')" style="background:#111;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">EDIT</button><button onclick="deleteMyRequest('+reqIdx+')" style="background:#E30613;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">CANCEL</button></div></div>';
           }
         } else {
-          htmlStr+='<div class="card" style="cursor:pointer;border:2px solid #111" onclick="requestShiftCorrectionFromSchedule('+u.idx+', \''+u.date.date+' '+u.date.day+'\', \''+u.shift.replace(/\'/g, "\\'")+'\')"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+'<br><small style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px">TAP TO REQUEST EDIT</small></div>';
+          htmlStr+='<div class="card" style="cursor:pointer;border:2px solid #111" onclick="requestShiftCorrectionFromSchedule('+u.idx+', \''+u.date.date+' '+u.date.day+'\', \''+u.shift.replace(/\'/g, "\\'")+ '\')"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+'<br><small style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px">TAP TO REQUEST EDIT</small></div>';
+        }('+u.idx+', \''+u.date.date+' '+u.date.day+'\', \''+u.shift.replace(/\'/g, "\\'")+'\')"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+'<br><small style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px">TAP TO REQUEST EDIT</small></div>';
         }
       }
     } else {
