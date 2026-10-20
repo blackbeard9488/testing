@@ -26,6 +26,73 @@ button{cursor:pointer}
 .login-row input{flex:1;max-width:254px;background:#CCCCCC;border:none;border-radius:9999px;height:46px;padding:0 18px;font-size:15px;font-weight:600;outline:none}
 #login-signin-btn{background:#CCCCCC;border:none;border-radius:9999px;width:100%;max-width:382px;height:46px;font-family:'Arial Black',sans-serif;font-weight:900;font-size:15px;margin-top:14px}
 #login-err{color:#E30613;font-weight:900;font-size:12px;margin-top:10px;min-height:16px;text-align:center}
+
+/* MOBILE FIX: Login centering and pills outside screen */
+@media (max-width: 600px){
+  #login-page{
+    padding:0 !important;
+    align-items:flex-start !important;
+    justify-content:flex-start !important;
+    overflow-y:auto !important;
+    padding-top:20vh !important;
+  }
+  #login-page .center{
+    width:92% !important;
+    max-width:92% !important;
+    padding:16px !important;
+    margin:0 auto !important;
+    box-sizing:border-box !important;
+  }
+  #login-page .title{
+    font-size:18px !important;
+    margin-bottom:16px !important;
+    text-align:center !important;
+    word-wrap:break-word !important;
+  }
+  .login-row{
+    flex-direction:column !important;
+    align-items:stretch !important;
+    gap:6px !important;
+    max-width:100% !important;
+    width:100% !important;
+    margin-bottom:14px !important;
+  }
+  .login-row label{
+    min-width:auto !important;
+    width:100% !important;
+    text-align:left !important;
+    font-size:12px !important;
+    padding-left:4px !important;
+  }
+  .login-row input{
+    max-width:100% !important;
+    width:100% !important;
+    flex:none !important;
+    box-sizing:border-box !important;
+    height:48px !important;
+  }
+  #login-signin-btn{
+    max-width:100% !important;
+    width:100% !important;
+    box-sizing:border-box !important;
+  }
+  #login-page .red-corner, #login-page .black-corner{
+    width:35vw !important;
+    height:25vh !important;
+  }
+}
+@media (max-width: 380px){
+  #login-page .center{
+    width:96% !important;
+    max-width:96% !important;
+    padding:12px !important;
+  }
+  .login-row input{
+    font-size:16px !important; /* Prevents iOS zoom */
+  }
+}
+
+
 #global-header{position:fixed;top:0;left:0;right:0;z-index:100;background:#fff;border-bottom:4px solid #0a0a0a;padding:10px 14px;display:none;flex-direction:column;align-items:flex-start;gap:10px}#global-header.show{display:flex;flex-direction:column}
 #global-header.show{display:flex}
 .r-title-consistent{width:100%;font-family:'Arial Black',Impact,sans-serif;font-weight:900;font-size:22px;font-style:italic;transform:skewX(-6deg)} .r-title-consistent span{color:#E30613}
@@ -580,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_SYNTAX_V87";
+const BUILD_ID="20261022690000_FIX_JSONSTORE_429_V89";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -914,15 +981,7 @@ function applyCloudState(state,isInitial){
 
 
 async function cloudLoad(){
-  // Try to set Firebase rules to public so live sync works - best effort, may fail if rules already restrict .settings
-  try{
-    fetch(FIREBASE_DB_URL+'/.settings/rules.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({rules:{'.read':true,'.write':true}}),mode:'cors',cache:'no-store'}).then(function(res){
-      console.log('Firebase rules set to public:', res.ok, res.status);
-    }).catch(function(e){ console.log('Rules set failed (expected if not allowed):', e.message); });
-  }catch(e){}
-
-
-  try{
+try{
     if(db){
       var snap=await db.ref('repco_state').once('value'); var data=snap.val();
       if(data && data._ts){
@@ -1073,125 +1132,10 @@ async function cloudLoad(){
 
   // JSONSTORE fallback polling for mobile->desktop requests - enables cross-device sync when Firebase blocks
   setInterval(async function(){
-    try{
-      var rj=await fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-requests?_t='+Date.now(),{cache:'no-store', mode:'cors'});
-      if(!rj.ok) return;
-      var jd=await rj.json();
-      if(!jd || !jd.request || !jd.request.id) return;
-      var cr=jd.request;
-      var localReqs=safeGetJSON('retail_roster_requests_v2',[]);
-      var found=localReqs.find(function(lr){ return lr.id===cr.id; });
-      if(!found){
-        console.log('LIVE SYNC: Found new request via jsonstore', cr.id, 'from', cr.username, '- Mobile->Desktop fix');
-        localReqs.push(cr);
-        safeSetJSON('retail_roster_requests_v2', localReqs);
-        try{ renderMySchedule(); }catch(e){}
-        try{ renderRequests(); }catch(e){}
-        try{ updateRequestsBadge(); }catch(e){}
-        toast('Live: New request from '+cr.username+' (jsonstore)');
-      } else if(found.status==='pending' && (cr.status==='denied' || cr.status==='rejected' || cr.status==='approved')){
-        // Also overwrite pending with denied - makes deny follow same logic as request create
-        console.log('LIVE SYNC: Found denied via all-requests jsonstore', cr.id, 'from', cr.username, '- Deny follows same logic as submit');
-        var idx=localReqs.findIndex(function(lr){ return lr.id===cr.id; });
-        if(idx!==-1){
-          localReqs[idx]=cr;
-          safeSetJSON('retail_roster_requests_v2', localReqs);
-          try{ renderMySchedule(); }catch(e){}
-          try{ renderRequests(); }catch(e){}
-          toast('Live: Request '+cr.status+' (jsonstore all-requests)');
-        }
-      }
-    }catch(e){ console.log('jsonstore requests poll error', e.message); }
+}catch(e){ console.log('jsonstore requests poll error', e.message); }
   },2000);
 l(async function(){
-    try{
-      var rj=await fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-deleted?_t='+Date.now(),{cache:'no-store', mode:'cors'});
-      if(!rj.ok) return;
-      var jd=await rj.json();
-      if(!jd || !jd.id) return;
-      var localReqs=safeGetJSON('retail_roster_requests_v2',[]);
-      var idx=localReqs.findIndex(function(lr){ return lr.id===jd.id; });
-      if(idx!==-1){
-        console.log('LIVE SYNC: Found deleted via jsonstore', jd.id, '- Mobile->Desktop fix');
-        localReqs.splice(idx,1);
-        safeSetJSON('retail_roster_requests_v2', localReqs);
-        try{ renderMySchedule(); }catch(e){}
-        try{ renderRequests(); }catch(e){}
-      }
-    }catch(e){}
-  },3000);
-
-
-  // JSONSTORE fallback polling for DENIED - enables admin->employee when Firebase blocks
-  setInterval(async function(){
-    try{
-      var rj=await fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-denied?_t='+Date.now(),{cache:'no-store', mode:'cors'});
-      if(!rj.ok){
-        console.log('LIVE SYNC: jsonstore denied poll cors failed', rj.status, 'trying no-cors');
-        try{ await fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-denied?_t='+Date.now(),{cache:'no-store', mode:'no-cors'}); }catch(e){}
-        return;
-      }
-      var jd=await rj.json();
-      if(!jd || !jd.request || !jd.request.id) return;
-      var cr=jd.request;
-      var localReqs=safeGetJSON('retail_roster_requests_v2',[]);
-      var idx=localReqs.findIndex(function(lr){ return lr.id===cr.id; });
-      if(idx!==-1 && localReqs[idx].status==='pending'){
-        console.log('LIVE SYNC: Found denied via jsonstore', cr.id, 'from', cr.username, '- Admin->Employee fix - PENDING->DENIED');
-        localReqs[idx]=cr;
-        safeSetJSON('retail_roster_requests_v2', localReqs);
-        try{ renderMySchedule(); }catch(e){}
-        try{ renderRequests(); }catch(e){}
-        try{ updateRequestsBadge(); }catch(e){}
-        toast('Live: Request denied by admin (jsonstore) - now showing DENIED');
-      } else if(idx===-1){
-        // Also check by date+username if ID not found
-        for(var j=0;j<localReqs.length;j++){
-          var lr=localReqs[j];
-          if(!lr || lr.status!=='pending') continue;
-          var m1=lr.shiftDate?lr.shiftDate.match(/(\d{1,2}\/\d{1,2})/):null;
-          var m2=cr.shiftDate?cr.shiftDate.match(/(\d{1,2}\/\d{1,2})/):null;
-          var lrKey=(lr.username||'').toLowerCase()+'|'+(m1?m1[1]:lr.shiftDate||'');
-          var crKey=(cr.username||'').toLowerCase()+'|'+(m2?m2[1]:cr.shiftDate||'');
-          if(lrKey===crKey){
-            console.log('LIVE SYNC: Found denied via jsonstore by DATE', cr.id, 'for', cr.username, 'pending->denied', lrKey);
-            localReqs[j]=cr;
-            safeSetJSON('retail_roster_requests_v2', localReqs);
-            try{ renderMySchedule(); }catch(e){}
-            toast('Live: Denied by date match');
-            break;
-          }
-        }
-      }
-    }catch(e){ console.log('jsonstore denied poll error', e.message); }
-  },1000);
-// JSONSTORE fallback polling for USERS - username/password live sync
-  setInterval(async function(){
-    try{
-      var rj=await fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-users?_t='+Date.now(),{cache:'no-store', mode:'cors'});
-      if(!rj.ok) return;
-      var jd=await rj.json();
-      if(!jd || !jd.users || !Array.isArray(jd.users)) return;
-      var localUsers=safeGetJSON('retail_roster_users_v1',[]);
-      var cloudUsers=jd.users;
-      // If counts differ or any username/password differs, update
-      var hasChange=false;
-      if(localUsers.length!==cloudUsers.length) hasChange=true;
-      else {
-        for(var i=0;i<cloudUsers.length;i++){
-          var cu=cloudUsers[i];
-          var lu=localUsers.find(function(u){ return u.username.toLowerCase()===cu.username.toLowerCase(); });
-          if(!lu) { hasChange=true; break; }
-          if(lu.password!==cu.password || lu.role!==cu.role || lu.username!==cu.username) { hasChange=true; break; }
-        }
-      }
-      if(hasChange){
-        console.log('LIVE SYNC: Found user changes via jsonstore', cloudUsers.length, 'users - Username/password live sync');
-        safeSetJSON('retail_roster_users_v1', cloudUsers);
-        try{ renderAccountMgmtPage(); }catch(e){}
-        toast('Live: Users updated (username/password changed)');
-      }
-    }catch(e){ console.log('jsonstore users poll error', e.message); }
+}catch(e){}
   },3000);
 
 }
@@ -1336,52 +1280,24 @@ async function doLogin(){
   var err=document.getElementById('login-err');
   if(!u||!p){ if(err) err.textContent='Enter username & password'; return; }
   
-  // Always try to get latest users from cloud first - fixes admin username/password change not updating
+  // Always try to get latest users from Firebase - jsonstore removed due to 429/CORS
   try{
-    // Try jsonstore first (public, same as requests which works perfectly)
-    var rj=await fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-users?_t='+Date.now(),{cache:'no-store', mode:'cors'});
-    if(rj.ok){
-      var jd=await rj.json();
-      if(jd && jd.users && Array.isArray(jd.users) && jd.users.length>0){
-        var localUsers=safeGetJSON('retail_roster_users_v1',[]);
-        var cloudUsers=jd.users;
-        var hasChange=false;
-        if(localUsers.length!==cloudUsers.length) hasChange=true;
-        else {
-          for(var i=0;i<cloudUsers.length;i++){
-            var cu=cloudUsers[i];
-            var lu=localUsers.find(function(x){ return x.username.toLowerCase()===cu.username.toLowerCase(); });
-            if(!lu) { hasChange=true; break; }
-            if(lu.password!==cu.password || lu.role!==cu.role || lu.username!==cu.username) { hasChange=true; break; }
-          }
-        }
-        if(hasChange){
-          console.log('doLogin: Found newer users via jsonstore, syncing', cloudUsers.length, 'users');
-          safeSetJSON('retail_roster_users_v1', cloudUsers);
-        }
-      }
-    }
-  }catch(e){ console.log('doLogin jsonstore pre-fetch error', e.message); }
-  
-  try{
-    // Try Firebase REST as well
     var rf=await fetch(FIREBASE_DB_URL+'/retail_roster_users_v1.json?_t='+Date.now(),{cache:'no-store', mode:'cors'});
     if(rf.ok){
       var fUsers=await rf.json();
       if(Array.isArray(fUsers) && fUsers.length>0){
         var localUsers2=safeGetJSON('retail_roster_users_v1',[]);
-        // If Firebase has different count or any password differs, use it
         var hasChange2=false;
         if(localUsers2.length!==fUsers.length) hasChange2=true;
         else {
           for(var i=0;i<fUsers.length;i++){
             var cu=fUsers[i];
             var lu=localUsers2.find(function(x){ return x.username.toLowerCase()===cu.username.toLowerCase(); });
-            if(!lu || lu.password!==cu.password) { hasChange2=true; break; }
+            if(!lu || lu.password!==cu.password || lu.username!==cu.username || lu.role!==cu.role) { hasChange2=true; break; }
           }
         }
         if(hasChange2){
-          console.log('doLogin: Found newer users via Firebase, syncing');
+          console.log('doLogin: Found newer users via Firebase, syncing', fUsers.length);
           safeSetJSON('retail_roster_users_v1', fUsers);
         }
       }
@@ -1391,28 +1307,10 @@ async function doLogin(){
   var users=safeGetJSON('retail_roster_users_v1',[]);
   var found=users.find(function(x){ return x.username.toLowerCase()===u.toLowerCase() && x.password===p; });
   if(!found){
-    // Also try case-insensitive password check and trim
     found=users.find(function(x){ return x.username.toLowerCase()===u.toLowerCase() && (x.password||'').trim()===p.trim(); });
     if(!found){
-      // Final fallback: check cloud one more time with no-cors (in case cors failed)
-      try{
-        var rj2=await fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-users?_t='+Date.now(),{cache:'no-store', mode:'cors'});
-        if(rj2.ok){
-          var jd2=await rj2.json();
-          if(jd2 && jd2.users){
-            var cloudFound=jd2.users.find(function(x){ return x.username.toLowerCase()===u.toLowerCase() && (x.password===p || (x.password||'').trim()===p.trim()); });
-            if(cloudFound){
-              console.log('doLogin: Found user via jsonstore final fallback', cloudFound.username);
-              safeSetJSON('retail_roster_users_v1', jd2.users);
-              found=cloudFound;
-            }
-          }
-        }
-      }catch(e){}
-      if(!found){
-        if(err) err.textContent='Incorrect password or username';
-        return;
-      }
+      if(err) err.textContent='Incorrect password or username';
+      return;
     }
   }
   safeSet('repco_username', found.username);
@@ -1432,6 +1330,7 @@ async function doLogin(){
   }
   toast('Welcome '+found.firstName);
 }
+
 
 
 window.doLogin = doLogin;
@@ -2876,8 +2775,7 @@ function adminAddUserMgmt(){
         pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
       }
       try{ pushWithFallback(FIREBASE_DB_URL+'/retail_roster_users_v1.json', JSON.stringify(users), 'users_v1'); }catch(e){}
-      try{ fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({users:users, ts:Date.now()}),mode:'cors'}).then(function(res){ console.log('LIVE USER ADD: jsonstore', res.ok); }); }catch(e){}
-    }catch(e){ console.error('LIVE USER ADD error', e); }
+      try{     }catch(e){ console.error('LIVE USER ADD error', e); }
   },500);
 }
 
@@ -2917,7 +2815,6 @@ function adminEditUser(idx){ let users=safeGetJSON('retail_roster_users_v1',[]);
         pushWithFallback(FIREBASE_DB_URL+'/retail_roster_users_v1.json', JSON.stringify(users), 'users_v1');
       }catch(e){}
       try{
-        fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({users:users, ts:Date.now()}),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE USER EDIT: jsonstore users', res.ok); }).catch(function(){});
       }catch(e){}
       if(typeof BroadcastChannel!=='undefined'){
         try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'user_edit', users:users, ts:Date.now()}); }catch(e){}
@@ -2944,8 +2841,7 @@ function adminDelUser(idx){ let users=safeGetJSON('retail_roster_users_v1',[]); 
         pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
       }
       try{ pushWithFallback(FIREBASE_DB_URL+'/retail_roster_users_v1.json', JSON.stringify(users), 'users_v1'); }catch(e){}
-      try{ fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({users:users, ts:Date.now()}),mode:'cors'}).then(function(res){ console.log('LIVE USER DELETE: jsonstore', res.ok); }); }catch(e){}
-    }catch(e){ console.error('LIVE USER DELETE error', e); }
+      try{     }catch(e){ console.error('LIVE USER DELETE error', e); }
   },500);
 }); }
 
@@ -3128,25 +3024,7 @@ function denyReq(i){
           pushWithFallback(FIREBASE_DB_URL+'/retail_roster_requests_v2.json', JSON.stringify(reqs), 'requests_v2');
           pushWithFallback(FIREBASE_DB_URL+'/denied_requests/'+r.id+'.json', JSON.stringify(r), 'denied_single');
         }catch(e){}
-        
-        try{
-          // JSONSTORE with cors + no-cors fallback - same as request which works perfectly
-          fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-denied',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request:r, ts:Date.now()}),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE DENY: jsonstore all-denied', res.ok, res.status); }).catch(function(e){ console.log('LIVE DENY: jsonstore all-denied cors failed, trying no-cors', e.message); try{ fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-denied',{method:'POST',body:JSON.stringify({request:r, ts:Date.now()}),mode:'no-cors',cache:'no-store'}); }catch(e2){} });
-          fetch('https://www.jsonstore.io/api/bins/repco-roster-live-'+r.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(r),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE DENY: jsonstore single', res.ok); }).catch(function(e){ try{ fetch('https://www.jsonstore.io/api/bins/repco-roster-live-'+r.id,{method:'POST',body:JSON.stringify(r),mode:'no-cors',cache:'no-store'}); }catch(e2){} });
-          // Also push to all-requests bin so employee's existing all-requests polling finds denied (same logic as submit)
-          fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-requests',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:r.id, request:r, ts:Date.now()}),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE DENY: jsonstore all-requests (same as submit)', res.ok); }).catch(function(e){ try{ fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-requests',{method:'POST',body:JSON.stringify({id:r.id, request:r, ts:Date.now()}),mode:'no-cors',cache:'no-store'}); }catch(e2){} });
-        }catch(e){ console.error('LIVE DENY: jsonstore error', e); }
-
-        
-        try{
-          // Also push to all-requests bin so employee's existing all-requests polling finds denied (same logic as submit)
-          fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-requests',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:r.id, request:r, ts:Date.now()}),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE DENY: jsonstore all-requests (same as submit)', res.ok); }).catch(function(){});
-        }catch(e){}
-
-        if(typeof BroadcastChannel!=='undefined'){
-          try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'request_denied', id:r.id, request:r, ts:Date.now()}); }catch(e){}
-        }
-      }catch(e){ console.error('DENY cloud error', e); }
+}catch(e){ console.error('DENY cloud error', e); }
     },500);
   }catch(e){ console.error('DENY error', e); toast('Error: '+e.message); }
 }
@@ -5004,7 +4882,6 @@ function renderMySchedule(){
           try{ fetch(FIREBASE_DB_URL+'/retail_roster_requests_v2.json?_t='+Date.now(),{cache:'no-store', mode:'no-cors'}); }catch(e2){}
         });
         // Check jsonstore fallback - always works even if Firebase blocks
-        fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-denied?_t='+Date.now(),{cache:'no-store', mode:'cors'}).then(function(res){
           if(!res.ok) throw new Error('jsonstore failed');
           return res.json();
         }).then(function(jData){
@@ -5012,7 +4889,6 @@ function renderMySchedule(){
           var cr=jData.request || jData;
           if(!cr || !cr.id) return;
           overwritePendingWithDenied([cr], 'jsonstore');
-        }).catch(function(e){ console.log('jsonstore fetch failed', e.message); });
         // Also check repco_state for denied
         fetch(FIREBASE_DB_URL+'/repco_state.json?_t='+Date.now(),{cache:'no-store', mode:'cors'}).then(function(res){
           if(!res.ok) throw new Error('repco_state failed');
@@ -5745,8 +5621,7 @@ function changePassword(){
         pushWithFallback(FIREBASE_DB_URL+'/repco_state.json', JSON.stringify(state), 'repco_state');
       }
       try{ pushWithFallback(FIREBASE_DB_URL+'/retail_roster_users_v1.json', JSON.stringify(users), 'users_v1'); }catch(e){}
-      try{ fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({users:users, ts:Date.now()}),mode:'cors'}); }catch(e){}
-    }catch(e){}
+      try{     }catch(e){}
   },500);
 }
 
@@ -5928,7 +5803,6 @@ function deleteMyRequest(idx){
               pushWithFallback(FIREBASE_DB_URL+'/retail_roster_requests_v2.json', JSON.stringify(reqs), 'requests_v2');
             }catch(e){}
             try{
-              fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-deleted',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:deletedId, ts:Date.now()}),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE DELETE: jsonstore deleted', res.ok); }).catch(function(){});
             }catch(e){}
             if(typeof BroadcastChannel!=='undefined'){
               try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'delete_request', id:deletedId, ts:Date.now()}); }catch(e){}
@@ -6407,8 +6281,7 @@ function submitShiftCorrectionRequest(idx, dateLabel, oldShift, newShift, reason
         }catch(e){}
         // JSONSTORE fallback - works even if Firebase blocks, enables mobile->desktop
         try{
-          fetch('https://www.jsonstore.io/api/bins/repco-roster-live-all-requests',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:req.id, request:req, ts:Date.now()}),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE SUBMIT: jsonstore all-requests', res.ok); }).catch(function(){});
-          fetch('https://www.jsonstore.io/api/bins/repco-roster-live-'+req.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(req),mode:'cors',cache:'no-store'}).then(function(res){ console.log('LIVE SUBMIT: jsonstore single', res.ok); }).catch(function(){});
+
         }catch(e){}
         if(typeof BroadcastChannel!=='undefined'){
           try{ var bc=new BroadcastChannel('repco_roster_sync'); bc.postMessage({type:'new_request', id:req.id, request:req, ts:Date.now()}); console.log('LIVE SUBMIT: BroadcastChannel sent'); }catch(e){}
