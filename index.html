@@ -162,10 +162,10 @@ body:not(.is-admin) .daily-total-casual {
 <style>body.staff-view .r-table th:last-child, body.staff-view .r-table td.hrs, body.staff-view #admin-total-badge { display: none !important; }</style>
 
 <style>
-@keyframes pulse {0%{transform:scale(1);box-shadow:0 0 0 0 rgba(227,6,19,0.7);}70%{transform:scale(1.05);box-shadow:0 0 0 10px rgba(227,6,19,0);}100%{transform:scale(1);box-shadow:0 0 0 0 rgba(227,6,19,0);}}
+@keyframes  {0%{transform:scale(1);box-shadow:0 0 0 0 rgba(227,6,19,0.7);}70%{transform:scale(1.05);box-shadow:0 0 0 10px rgba(227,6,19,0);}100%{transform:scale(1);box-shadow:0 0 0 0 rgba(227,6,19,0);}}
 @keyframes flash {0%,50%,100%{background:#FFFBCC;border-color:#E30613;}25%,75%{background:#E30613;color:#fff;border-color:#111;}}
-.requests-has-new{animation:pulse 1.5s infinite, flash 1s infinite !important;background:#FFFBCC !important;border:3px solid #E30613 !important;}
-#requests-badge{animation:pulse 1s infinite !important;background:#E30613 !important;color:#fff !important;}
+.requests-has-new{, flash 1s infinite !important;background:#FFFBCC !important;border:3px solid #E30613 !important;}
+#requests-badge{ 1s infinite !important;background:#E30613 !important;color:#fff !important;}
 </style>
 
 <style>
@@ -294,7 +294,7 @@ body:not(.is-admin) .daily-total-casual {
 
 <div id="options-page" class="full-page"><div class="page-inner"><div class="page-title">OPTIONS</div><div id="options-inner"></div></div></div>
 <div id="requests-page" class="full-page"><div class="page-inner"><div class="page-title">REQUESTS</div><div id="requests-list"></div><div id="req-list" style="display:none"></div></div></div>
-<div id="unavail-page" class="full-page"><div class="page-inner"><div class="page-title">STAFF UNAVAILABLE</div><div id="unavail-list"></div></div></div>
+<div id="unavail-page" class="full-page"><div class="page-inner"><div id="unavail-list"></div></div></div>
 <div id="buddies-today-page-v141" class="full-page"><div class="page-inner"><div class="page-title">TODAY'S BUDDIES</div><div id="buddies-today-list"></div></div></div>
 <div id="buddies-tomorrow-page-v141" class="full-page"><div class="page-inner"><div class="page-title">TOMORROW'S BUDDIES</div><div id="buddies-tomorrow-list"></div></div></div>
 <div id="mysched-page" class="full-page"><div class="page-inner"><div class="page-title">MY SCHEDULE</div><div id="mysched-list"></div></div></div>
@@ -351,7 +351,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022090000_FIX_PENDING_COLOUR_V13";
+const BUILD_ID="20261022160000_FIX_REJECTED_DENIED_V20";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -449,7 +449,7 @@ function isCasual(st){return st.employmentType==='casual'}
 const FIREBASE_DB_URL="https://testing-de079-default-rtdb.asia-southeast1.firebasedatabase.app";
 const FIREBASE_CONFIG={apiKey:"AIzaSy placeholder",authDomain:"testing-de079.firebaseapp.com",databaseURL:FIREBASE_DB_URL,projectId:"testing-de079",storageBucket:"testing-de079.appspot.com",messagingSenderId:"0",appId:"1:0:web:repco"};
 let db=null; try{ if(!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG); db=firebase.database(); }catch(e){ db=null; }
-const CLOUD_KEYS=['retail_roster_byFortnight_v1','retail_roster_users_v1','retail_roster_requests_v2','retail_roster_hidden_v1','retail_roster_hidden_shifts_v1','retail_roster_archive_v1','retail_roster_uploaded_excels_v1','maintenance_mode','repco_maintenance_first_v1'];
+const CLOUD_KEYS=['retail_roster_byFortnight_v1','retail_roster_users_v1','retail_roster_requests_v2','retail_roster_hidden_v1','retail_roster_hidden_shifts_v1','retail_roster_archive_v1','retail_roster_uploaded_excels_v1','maintenance_mode','repco_maintenance_first_v1','retail_roster_hidden_staff_v1'];
 let cloudSaveTimer=null; let suppressCloudSave=false;
 function getAllState(){let o={}; CLOUD_KEYS.forEach(k=>{let v=safeGet(k); if(v!==null) o[k]=v;}); o._ts=Date.now(); o._build=BUILD_ID; return o;}
 
@@ -1019,9 +1019,23 @@ function renderRosterSafe(){
       rows+='<tr class="'+rowClass+'"><td class="staff-cell" '+(isMgr?'onclick="editStaffType('+globalStaffIdx+')" style="cursor:pointer"':'')+'>'+st.lastName.toUpperCase()+', '+st.firstName+(own?' ← YOU':'')+'</td>';
       (st.shifts||[]).forEach(function(sh,idx){
         var na=st.unavailable && st.unavailable[idx]; var isAbsentApproved=st.absentApproved && st.absentApproved[idx]; var isGreen=st.cellGreen && st.cellGreen[idx]; var orig=st.originalShifts && st.originalShifts[idx] ? st.originalShifts[idx] : null;
-        var disp=na?'NA':sh; var txt=fmt(disp); if(isAbsentApproved && orig){ txt=fmt(orig)+' AB'; } else if(disp.toUpperCase()==='OFF' || disp==='' ){ txt=''; }
+        var disp=sh;
+        // For UA/NA unavailable: show UA (black with UA) but remember original
+        if(na){
+          if((sh||'').toUpperCase()==='UA' || (sh||'').toUpperCase()==='NA' || (sh||'').toUpperCase()==='UNAVAILABLE' || (sh||'').toUpperCase()==='U'){
+            disp=(sh||'').toUpperCase()==='UA'?'UA':'UA';
+          } else {
+            disp='UA';
+          }
+        }
+        var txt=fmt(disp);
+        if(isAbsentApproved && orig){ txt=fmt(orig)+' AB'; }
+        else if(na && orig){ txt=fmt(disp)+' ('+fmt(orig)+')'; if(disp.toUpperCase()==='UA' || disp.toUpperCase()==='NA') txt='UA'; }
+        else if(disp.toUpperCase()==='OFF' || disp==='' ){ txt=''; }
+        else if(disp.toUpperCase()==='UA' || disp.toUpperCase()==='NA'){ txt='UA'; }
         var off=['OFF',''].includes((disp||'').toUpperCase().trim()); var absent=['AB','ABSENT'].includes((disp||'').toUpperCase().trim()) || isAbsentApproved;
-        var cls=''; if(na) cls='cell-na'; else if(absent) cls='cell-absent'; else if(off) cls='cell-off'; else if(isGreen) cls='cell-green'; else cls='cell-work';
+        var isUA=['UA','NA','UNAVAILABLE','U'].includes((disp||'').toUpperCase().trim()) || na;
+        var cls=''; if(isUA) cls='cell-na'; else if(na) cls='cell-na'; else if(absent) cls='cell-absent'; else if(off) cls='cell-off'; else if(isGreen) cls='cell-green'; else cls='cell-work';
         var isWeekendCol=isWeekend(cur.dates[idx].day); var weekendClass=''; if(isWeekendCol){ var prevWeekend=idx>0?isWeekend(cur.dates[idx-1].day):false; var nextWeekend=idx<cur.dates.length-1?isWeekend(cur.dates[idx+1].day):false; if(!prevWeekend) /*weekendClass+=' weekend-start'*/; if(!nextWeekend) /*weekendClass+=' weekend-end'*/; cls+=' col-weekend'+weekendClass; }
         var isFull=!isCasual(st); var net; if(isAbsentApproved){ net = isFull ? netH(orig||sh) : 0; } else if(isFull){ if(na){ net=netH(orig||sh); } else { net=netH(sh); } } else { if(na||off||absent){ net=0; } else { net=netH(sh); } } hrs+=net;dayTotals[idx]+=net;
         var clickAttr=''; if(isMgr){ clickAttr=' onclick="editCell(this,'+globalStaffIdx+','+idx+',\''+title+'\')" '; }
@@ -1291,7 +1305,7 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
             actualShift='AB';
           } else if(up==='UA' || up==='UNAVAILABLE' || up==='U' || up==='NA'){
             isNA=true;
-            actualShift='NA';
+            actualShift='UA';
           } else if(up==='OFF' || up===''){
             actualShift='OFF';
           }
@@ -1630,8 +1644,23 @@ function mapUsernameToStaffKey(username){
     'ballentine': {firstName:'Heath', lastName:'BALLENTINE'},
     'heath.ballentine': {firstName:'Heath', lastName:'BALLENTINE'},
     'ballentyne': {firstName:'Heath', lastName:'BALLENTINE'},
-    'christopher.culling.3': {firstName:'Chris', lastName:'CULLING'}
+    'christopher.culling.3': {firstName:'Chris', lastName:'CULLING'},
+    'michaelb': {firstName:'Michael', lastName:'BLAIK'},
+    'michael.blaik': {firstName:'Michael', lastName:'BLAIK'},
+    'michael blaik': {firstName:'Michael', lastName:'BLAIK'},
+    'blaik': {firstName:'Michael', lastName:'BLAIK'},
+    'michaele': {firstName:'Michael', lastName:'EVANS'},
+    'michael.evans': {firstName:'Michael', lastName:'EVANS'},
+    'michael evans': {firstName:'Michael', lastName:'EVANS'},
+    'evans': {firstName:'Michael', lastName:'EVANS'}
   };
+  // Handle last initial pattern: michaelb -> Michael BLAIK, michaele -> Michael EVANS
+  if(u.length>7 && u.startsWith('michael')){
+    var lastChar=u.charAt(u.length-1);
+    if(lastChar==='b') return {firstName:'Michael', lastName:'BLAIK'};
+    if(lastChar==='e') return {firstName:'Michael', lastName:'EVANS'};
+  }
+
   if(map[u]) return map[u];
   if(u.indexOf('.')!==-1){
     var parts=u.split('.');
@@ -2024,8 +2053,75 @@ function importExcelFile(file){
 function triggerImport(){
   let hi=document.getElementById('hidden-import-input'); if(!hi){ toast('Import input missing'); return; } hi.value=''; hi.onchange=function(){ if(hi.files && hi.files[0]){ importExcelFile(hi.files[0]); } }; hi.click();
 }
-function renderAccountMgmtPage(){ const el=document.getElementById('account-mgmt-inner'); if(!el) return; const users=safeGetJSON('retail_roster_users_v1',[]); let html='<div class="card"><div style="font-weight:900;margin-bottom:8px">ALL USERS</div><div id="admin-user-list-all">'; html+=users.map((u,i)=>'<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #eee;flex-wrap:wrap;gap:8px"><div><b>'+u.username+'</b> ('+u.role+')</div><div style="display:flex;gap:4px"><button onclick="adminEditUser('+i+')" style="background:#111;color:#fff;border:none;border-radius:9999px;padding:6px 10px;font-size:11px;font-weight:900">EDIT</button><button onclick="adminDelUser('+i+')" style="background:#E30613;color:#fff;border:none;border-radius:9999px;padding:6px 10px;font-size:11px;font-weight:900">DEL</button></div></div>').join(''); html+='</div>'; html+='<div style="margin-top:16px;font-weight:900">ADD NEW USER</div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><input id="new-user-name" placeholder="Username" style="flex:1;min-width:120px;padding:10px;border-radius:9999px;border:2px solid #111"><input id="new-user-pass" placeholder="Password" type="password" style="flex:1;min-width:120px;padding:10px;border-radius:9999px;border:2px solid #111"><select id="new-user-role" style="padding:10px;border-radius:9999px;border:2px solid #111"><option value="staff">staff</option><option value="manager">manager</option><option value="admin">admin</option><option value="master">master</option></select><button onclick="adminAddUserMgmt()" style="background:#E30613;color:#fff;border:none;border-radius:9999px;padding:10px 14px;font-weight:900">ADD USER</button></div>'; html+='<div class="card" style="margin-top:16px"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:10px 14px;font-weight:900;width:100%">← BACK TO ROSTER</button></div></div>'; el.innerHTML=html; }
-function adminAddUserMgmt(){ const un=(document.getElementById('new-user-name').value||'').trim(); const pw=(document.getElementById('new-user-pass').value||'').trim(); const role=document.getElementById('new-user-role').value||'staff'; if(!un||!pw){ toast('Enter username & password'); return; } let users=safeGetJSON('retail_roster_users_v1',[]); if(users.find(x=>x.username.toLowerCase()===un.toLowerCase())){ toast('Username exists'); return; } users.push({username:un,password:pw,firstName:un,lastName:'',role:role,employmentType:'fulltime'}); safeSetJSON('retail_roster_users_v1',users); document.getElementById('new-user-name').value=''; document.getElementById('new-user-pass').value=''; toast('Added '+un+' - synced'); renderAccountMgmtPage(); }
+function renderAccountMgmtPage(){ 
+  const el=document.getElementById('account-mgmt-inner'); 
+  if(!el) return; 
+  const users=safeGetJSON('retail_roster_users_v1',[]); 
+  const fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+  const cur=getCurrentFortnight();
+  let html='<div class="card"><div style="font-weight:900;margin-bottom:8px">ALL USERS - Linked to roster</div><div id="admin-user-list-all">'; 
+  html+=users.map((u,i)=>{
+    var mapped=null;
+    try{ mapped=mapUsernameToStaffKey(u.username); }catch(e){}
+    var rosterLink='Not linked';
+    var rosterFound=false;
+    if(cur && cur.staff){
+      var found=cur.staff.find(function(s){
+        if(u.firstName && u.lastName){
+          return s.firstName && s.lastName && s.firstName.toLowerCase()===u.firstName.toLowerCase() && s.lastName.toLowerCase()===u.lastName.toLowerCase();
+        }
+        if(mapped){
+          return s.firstName && s.lastName && s.firstName.toLowerCase()===mapped.firstName.toLowerCase() && (mapped.lastName==='' || s.lastName.toLowerCase()===mapped.lastName.toLowerCase());
+        }
+        return false;
+      });
+      if(found){
+        rosterLink=found.lastName.toUpperCase()+', '+found.firstName;
+        rosterFound=true;
+      } else if(mapped){
+        rosterLink=mapped.firstName+' '+mapped.lastName+' (mapped)';
+      }
+    }
+    var badge=rosterFound?'<span style="background:#B6F7C5;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px;font-weight:900">LINKED: '+rosterLink+'</span>':'<span style="background:#FFEB3B;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px">NOT LINKED: '+rosterLink+'</span>';
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #eee;flex-wrap:wrap;gap:8px"><div><b>'+u.username+'</b> ('+u.role+')<br><small>'+(u.firstName||'')+' '+(u.lastName||'')+'</small> '+badge+'</div><div style="display:flex;gap:4px"><button onclick="adminEditUser('+i+')" style="background:#111;color:#fff;border:none;border-radius:9999px;padding:6px 10px;font-size:11px;font-weight:900">EDIT</button><button onclick="adminDelUser('+i+')" style="background:#E30613;color:#fff;border:none;border-radius:9999px;padding:6px 10px;font-size:11px;font-weight:900">DEL</button></div></div>';
+  }).join(''); 
+  html+='</div>'; 
+  html+='<div style="margin-top:16px;font-weight:900">ADD NEW USER - Fix for Michaels: use first/last to link</div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><input id="new-user-name" placeholder="Username e.g. michaelb" style="flex:1;min-width:120px;padding:10px;border-radius:9999px;border:2px solid #111"><input id="new-user-pass" placeholder="Password" type="password" style="flex:1;min-width:120px;padding:10px;border-radius:9999px;border:2px solid #111"><input id="new-user-first" placeholder="First Name e.g. Michael" style="flex:1;min-width:100px;padding:10px;border-radius:9999px;border:2px solid #111"><input id="new-user-last" placeholder="Last Name e.g. BLAIK" style="flex:1;min-width:100px;padding:10px;border-radius:9999px;border:2px solid #111"><select id="new-user-role" style="padding:10px;border-radius:9999px;border:2px solid #111"><option value="staff">staff</option><option value="manager">manager</option><option value="admin">admin</option><option value="master">master</option></select><button onclick="adminAddUserMgmt()" style="background:#E30613;color:#fff;border:none;border-radius:9999px;padding:10px 14px;font-weight:900">ADD USER</button></div>'; 
+  html+='<div style="margin-top:8px;font-size:10px;color:#666">Tip: For Michael Blaik use username michaelb + First: Michael Last: BLAIK. For Michael Evans use michaele + First: Michael Last: EVANS. This links them to rostered name.</div>';
+  html+='<div class="card" style="margin-top:16px"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:10px 14px;font-weight:900;width:100%">← BACK TO ROSTER</button></div></div>'; 
+  el.innerHTML=html; 
+}
+function adminAddUserMgmt(){
+  const un=(document.getElementById('new-user-name').value||'').trim();
+  const pw=(document.getElementById('new-user-pass').value||'').trim();
+  const role=document.getElementById('new-user-role').value||'staff';
+  const firstInput=(document.getElementById('new-user-first')?.value||'').trim();
+  const lastInput=(document.getElementById('new-user-last')?.value||'').trim();
+  if(!un||!pw){ toast('Enter username & password'); return; }
+  let users=safeGetJSON('retail_roster_users_v1',[]);
+  if(users.find(x=>x.username.toLowerCase()===un.toLowerCase())){ toast('Username exists'); return; }
+  // Parse first/last name - use inputs if provided, otherwise try to map from username
+  var firstName=firstInput||'';
+  var lastName=lastInput||'';
+  if(!firstName){
+    var mapped=mapUsernameToStaffKey(un);
+    if(mapped){
+      firstName=mapped.firstName||un;
+      lastName=mapped.lastName||'';
+    } else {
+      firstName=un;
+    }
+  }
+  users.push({username:un,password:pw,firstName:firstName,lastName:lastName,role:role,employmentType:'fulltime'});
+  safeSetJSON('retail_roster_users_v1',users);
+  document.getElementById('new-user-name').value='';
+  document.getElementById('new-user-pass').value='';
+  var firstEl=document.getElementById('new-user-first'); if(firstEl) firstEl.value='';
+  var lastEl=document.getElementById('new-user-last'); if(lastEl) lastEl.value='';
+  toast('Added '+un+' ('+firstName+' '+lastName+') - linked to roster - synced');
+  renderAccountMgmtPage();
+  try{ debouncedCloudSave(); cloudSave(); }catch(e){}
+}
 function adminEditUser(idx){ let users=safeGetJSON('retail_roster_users_v1',[]); const u=users[idx]; if(!u) return; showCustomPrompt('Edit User', '<div style="display:flex;flex-direction:column;gap:8px"><input id="edit-u-name" value="'+u.username+'" style="padding:10px;border-radius:9999px;border:2px solid #111"><input id="edit-u-pass" placeholder="New password (blank to keep)" type="password" style="padding:10px;border-radius:9999px;border:2px solid #111"><select id="edit-u-role" style="padding:10px;border-radius:9999px;border:2px solid #111"><option value="staff" '+(u.role==='staff'?'selected':'')+'>staff</option><option value="manager" '+(u.role==='manager'?'selected':'')+'>manager</option><option value="admin" '+(u.role==='admin'?'selected':'')+'>admin</option><option value="master" '+(u.role==='master'?'selected':'')+'>master</option></select></div>', (ok)=>{ if(!ok) return; const nu=document.getElementById('edit-u-name').value.trim(); const np=document.getElementById('edit-u-pass').value.trim(); const nr=document.getElementById('edit-u-role').value; if(nu) u.username=nu; if(np) u.password=np; if(nr) u.role=nr; safeSetJSON('retail_roster_users_v1',users); try{ let curU=(safeGet('repco_username')||'').toLowerCase(); if(u && u.username.toLowerCase()===curU){ document.body.classList.remove('is-admin','staff-view'); if((role||'').toLowerCase()==='manager'||(role||'').toLowerCase()==='admin'){document.body.classList.add('is-admin');}else{document.body.classList.add('staff-view');}; safeSet('repco_currentRole', (nr||u.role||'').toLowerCase()); } }catch(e){} toast('Updated - synced - logout/login to apply role'); renderAccountMgmtPage(); applyRoleVisibility(); }); }
 function adminDelUser(idx){ let users=safeGetJSON('retail_roster_users_v1',[]); if(!users[idx]) return; showCustomConfirm('Delete user?', users[idx].username, (ok)=>{ if(!ok) return; if(users.length<=1){ toast('Cannot delete last user'); return; } users.splice(idx,1); safeSetJSON('retail_roster_users_v1',users); toast('Deleted - synced'); renderAccountMgmtPage(); }); }
 function saveLogoutTimer(){ const v=document.getElementById('logout-timer')?.value||'30'; safeSet('repco_logout_minutes',v); toast('Logout timer: '+(v==='0'?'Never':v+' min')); startLogoutTimer(); }
@@ -2091,15 +2187,28 @@ function approveReq(i){
           matched=true;
           if(!st.originalShifts) st.originalShifts=[];
           if(!st.originalShifts[idx]) st.originalShifts[idx]=st.shifts[idx];
-          if(r.type==='unavailability' || (r.newShift && r.newShift.toUpperCase()==='NA')){
+          if(r.type==='unavailability' || (r.newShift && ['NA','UA','UNAVAILABLE'].includes(r.newShift.toUpperCase()))){
+            if(!st.originalShifts) st.originalShifts=[];
+            if(!st.originalShifts[idx]) st.originalShifts[idx]=st.shifts[idx];
             if(!st.unavailable) st.unavailable=[];
             st.unavailable[idx]=true;
-            st.shifts[idx]='NA';
+            // Set as UA for unavailability - black with UA written (as requested)
+            var uaVal = r.newShift ? r.newShift.toUpperCase() : 'UA';
+            if(uaVal==='NA' || uaVal==='UNAVAILABLE' || uaVal==='UA' || uaVal==='U' || r.type==='unavailability'){
+              st.shifts[idx]='UA';
+            } else {
+              st.shifts[idx]=r.newShift;
+            }
           } else if(r.newShift && (r.newShift.toUpperCase()==='AB' || r.newShift.toUpperCase()==='ABSENT')){
+            if(!st.originalShifts) st.originalShifts=[];
+            if(!st.originalShifts[idx]) st.originalShifts[idx]=st.shifts[idx];
             if(!st.absentApproved) st.absentApproved=[];
             st.absentApproved[idx]=true;
             st.shifts[idx]='AB';
           } else {
+            if(!st.originalShifts) st.originalShifts=[];
+            if(r.oldShift && !st.originalShifts[idx]) st.originalShifts[idx]=r.oldShift;
+            else if(!st.originalShifts[idx]) st.originalShifts[idx]=st.shifts[idx];
             st.shifts[idx]=r.newShift;
           }
         }
@@ -2119,23 +2228,59 @@ function approveReq(i){
   try{ applyRoleVisibility(); }catch(e){}
   try{ if(typeof updateRequestsBadge==='function') updateRequestsBadge(); }catch(e){}
   try{ debouncedCloudSave(); }catch(e){}
+  try{
+    if(typeof cloudSave==='function') cloudSave();
+    var state=null;
+    if(typeof getAllState==='function') state=getAllState();
+    if(state){
+      safeSet('repco_cloud_ts', String(state._ts||Date.now()));
+      if(typeof db!=='undefined' && db && db.ref){
+        db.ref('repco_state').set(state).then(function(){ console.log('Approved request synced to cloud'); });
+      } else if(typeof FIREBASE_DB_URL!=='undefined'){
+        fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
+      }
+    }
+  }catch(e){ console.error('Cloud sync error on approve', e); }
+  try{ renderMySchedule(); }catch(e){}
   toast('Approved - '+(matched?'shift updated':'marked approved'));
 }
 function denyReq(i){
-  let reqs=safeGetJSON('retail_roster_requests_v2',[]);
-  let r=reqs[i];
-  if(!r) return;
-  r.status='denied';
-  r.readByStaff=false;
-  r.deniedBy=safeGet('repco_username')||'admin';
-  r.deniedTs=Date.now();
-  safeSetJSON('retail_roster_requests_v2',reqs);
+  try{
+    let reqs=safeGetJSON('retail_roster_requests_v2',[]);
+    let r=reqs[i];
+    if(!r) return;
+    var oldShift=r.oldShift||'';
+    r.status='denied';
+    r.readByStaff=false;
+    r.readByAdmin=true;
+    r.deniedBy=safeGet('repco_username')||'admin';
+    r.deniedTs=Date.now();
+    safeSetJSON('retail_roster_requests_v2',reqs);
     try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
     try{ updateRequestsBadge(); }catch(e){}
-  renderRequests();
-  try{ if(typeof updateRequestsBadge==='function') updateRequestsBadge(); }catch(e){}
-  try{ debouncedCloudSave(); }catch(e){}
-  toast('Denied');
+    renderRequests();
+    try{ renderMySchedule(); }catch(e){}
+    try{ renderRosterSafe(); }catch(e){}
+    try{ if(typeof updateRequestsBadge==='function') updateRequestsBadge(); }catch(e){}
+    // Immediate cloud sync for cross-device - employee schedule should revert instantly
+    try{
+      if(typeof debouncedCloudSave==='function') debouncedCloudSave();
+      if(typeof cloudSave==='function') cloudSave();
+      var state=null;
+      if(typeof getAllState==='function') state=getAllState();
+      if(state){
+        safeSet('repco_cloud_ts', String(state._ts||Date.now()));
+        if(typeof db!=='undefined' && db && db.ref){
+          db.ref('repco_state').set(state).then(function(){
+            console.log('Denied request synced to cloud - employee schedule will revert');
+          });
+        } else if(typeof FIREBASE_DB_URL!=='undefined'){
+          fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
+        }
+      }
+    }catch(e){ console.error('Cloud sync error on deny', e); }
+    toast('Denied - Employee schedule will revert to '+oldShift+' (was '+r.newShift+')');
+  }catch(e){ toast('Error: '+e.message); console.error(e); }
 }
 
 function renderArchive(){
@@ -2312,7 +2457,8 @@ function renderHiddenStaffPage(){
     } else {
       hidden.forEach(function(h, idx){
         var constantBadge=h.constantAcrossRosters ? '<span style="background:#B6F7C5;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px;font-weight:900;margin-left:6px">CONSTANT ACROSS ALL ROSTERS</span>' : '<span style="background:#FFEB3B;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px">THIS ROSTER ONLY</span>';
-        html+='<div class="card" style="padding:10px"><div style="font-weight:900;font-size:11px">'+(h.lastName||'')+', '+(h.firstName||'')+' ('+(h.username||'')+') - '+(h.type||'casual')+' '+constantBadge+'</div><div style="font-size:10px">Shifts: '+(h.shifts?h.shifts.join(', '):'OFF')+'</div><div style="margin-top:6px"><button onclick="deleteHiddenStaff('+idx+')" style="background:#E30613;color:#fff;border-radius:9999px;padding:4px 8px;font-weight:900;font-size:9px">DELETE</button></div></div>';
+        var shiftsDisplay=(h.shifts?h.shifts.slice(0,7).join(', '):'OFF')+(h.shifts && h.shifts.length>7?'...':'');
+        html+='<div class="card" style="padding:10px"><div style="font-weight:900;font-size:11px">'+(h.lastName||'')+', '+(h.firstName||'')+' ('+(h.username||'')+') - '+(h.type||'casual')+' '+constantBadge+'</div><div style="font-size:10px">Shifts: '+shiftsDisplay+'</div><div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap"><button onclick="editHiddenStaff('+idx+')" style="background:#111;color:#fff;border-radius:9999px;padding:4px 8px;font-weight:900;font-size:9px">EDIT</button><button onclick="deleteHiddenStaff('+idx+')" style="background:#E30613;color:#fff;border-radius:9999px;padding:4px 8px;font-weight:900;font-size:9px">DELETE</button></div></div>';
       });
     }
     el.innerHTML=html;
@@ -2344,6 +2490,72 @@ function renderHiddenStaffPage(){
     }
   }catch(e){ console.error('renderHiddenStaffPage error', e); }
 }
+function editHiddenStaff(idx){
+  try{
+    var hidden=safeGetJSON('retail_roster_hidden_staff_v1',[]);
+    var h=hidden[idx];
+    if(!h){ toast('Not found'); return; }
+    var html='<div style="font-size:11px"><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label style="font-size:9px;font-weight:900">First</label><input id="edit-hs-first" value="'+(h.firstName||'')+'" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111"></div><div><label style="font-size:9px;font-weight:900">Last</label><input id="edit-hs-last" value="'+(h.lastName||'')+'" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111"></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px"><div><label style="font-size:9px;font-weight:900">Username</label><input id="edit-hs-user" value="'+(h.username||'')+'" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111"></div><div><label style="font-size:9px;font-weight:900">Type</label><select id="edit-hs-type" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111"><option value="casual" '+(h.type==='casual'?'selected':'')+'>Casual</option><option value="fulltime" '+(h.type==='fulltime'?'selected':'')+'>Full Time</option></select></div></div><div style="margin-top:8px"><label style="font-size:9px;font-weight:900">Shifts (comma separated or edit in main grid after)</label><input id="edit-hs-shifts" value="'+(h.shifts?h.shifts.join(','):'')+'" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111"></div></div>';
+    showCustomConfirm('Edit Hidden Staff: '+h.firstName+' '+h.lastName, html, function(confirmed){
+      if(!confirmed) return;
+      var first=document.getElementById('edit-hs-first')?.value.trim()||'';
+      var last=document.getElementById('edit-hs-last')?.value.trim()||'';
+      var user=document.getElementById('edit-hs-user')?.value.trim()||'';
+      var type=document.getElementById('edit-hs-type')?.value||'casual';
+      var shiftsStr=document.getElementById('edit-hs-shifts')?.value.trim()||'';
+      if(!first||!last){ toast('First and Last required'); return; }
+      h.firstName=first; h.lastName=last; h.username=user; h.type=type;
+      if(shiftsStr){ h.shifts=shiftsStr.split(',').map(function(s){ return s.trim()||'OFF'; }); }
+      hidden[idx]=h;
+      safeSetJSON('retail_roster_hidden_staff_v1', hidden);
+      // Update users
+      var users=safeGetJSON('retail_roster_users_v1',[]);
+      var u=users.find(function(u){ return u.username && h.username && u.username.toLowerCase()===h.username.toLowerCase(); });
+      if(u){ u.firstName=first; u.lastName=last; u.type=type; safeSetJSON('retail_roster_users_v1', users); }
+      // Update rosters
+      var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+      for(var f=0;f<fns.length;f++){
+        var fn=fns[f];
+        var s=fn.staff.find(function(st){ return st.username && h.username && st.username.toLowerCase()===h.username.toLowerCase(); });
+        if(s){ s.firstName=first; s.lastName=last; s.type=type; if(h.shifts) s.shifts=h.shifts.slice(); }
+      }
+      safeSetJSON('retail_roster_byFortnight_v1', fns);
+      renderHiddenStaffPage();
+      renderRosterSafe();
+      try{ debouncedCloudSave(); cloudSave(); }catch(e){}
+      toast('Updated hidden staff: '+first+' '+last);
+    });
+  }catch(e){ toast('Error: '+e.message); }
+}
+function deleteHiddenStaff(idx){
+  showCustomConfirm('Delete Hidden Staff?', '<div style="font-size:11px">Delete this hidden staff permanently?<br>This will remove from hidden list and all rosters if constant.</div>', function(confirmed){
+    if(!confirmed) return;
+    try{
+      var hidden=safeGetJSON('retail_roster_hidden_staff_v1',[]);
+      var h=hidden[idx];
+      if(!h) return;
+      var username=h.username||'';
+      hidden.splice(idx,1);
+      safeSetJSON('retail_roster_hidden_staff_v1', hidden);
+      // Remove from all rosters if constant or not - clean up
+      var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+      for(var f=0;f<fns.length;f++){
+        var fn=fns[f];
+        fn.staff=fn.staff.filter(function(s){
+          if(username && s.username) return s.username.toLowerCase()!==username.toLowerCase();
+          return !(s.firstName===h.firstName && s.lastName===h.lastName);
+        });
+      }
+      safeSetJSON('retail_roster_byFortnight_v1', fns);
+      renderHiddenStaffPage();
+      renderRosterSafe();
+      try{ debouncedCloudSave(); cloudSave(); }catch(e){}
+      toast('Deleted hidden staff: '+h.firstName+' '+h.lastName);
+    }catch(e){ toast('Error: '+e.message); }
+  });
+}
+
+
 function addHiddenStaff(){
   try{
     var first=(document.getElementById('hs-first')?.value||'').trim();
@@ -2366,19 +2578,35 @@ function addHiddenStaff(){
     var hidden=safeGetJSON('retail_roster_hidden_staff_v1',[]);
     hidden.push({firstName:first,lastName:last,username:user,password:pass,type:type,shifts:shifts,constantAcrossRosters:constant});
     safeSetJSON('retail_roster_hidden_staff_v1', hidden);
-    // If constant, apply to all rosters
+    // Always add to current roster for admin main view (was missing - hidden not showing)
+    var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+    var curId=safeGet('retail_roster_currentFortnightId');
+    var curFn=fns.find(function(f){ return f.id===curId; });
+    if(curFn){
+      if(!curFn.staff) curFn.staff=[];
+      var existingCur=curFn.staff.find(function(s){ return s.username && s.username.toLowerCase()===user.toLowerCase(); });
+      if(!existingCur){
+        curFn.staff.push({firstName:first,lastName:last,username:user,type:type,shifts:shifts,hidden:true,originalShifts:shifts.slice()});
+      } else {
+        existingCur.hidden=true;
+        existingCur.shifts=shifts;
+        existingCur.firstName=first;
+        existingCur.lastName=last;
+      }
+    }
+    safeSetJSON('retail_roster_byFortnight_v1', fns);
+    // If constant, apply to ALL rosters
     if(constant){
-      var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+      fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
       for(var f=0;f<fns.length;f++){
         var fn=fns[f];
         if(!fn.staff) continue;
+        if(fn.id===curId) continue; // Already done
         var existing=fn.staff.find(function(s){ return s.username && s.username.toLowerCase()===user.toLowerCase(); });
         if(!existing){
-          // Clone shifts pattern to match this fortnight's day of week pattern if possible
           var clonedShifts=[];
           for(var d=0;d<fn.dates.length;d++){
             var day=fn.dates[d].day;
-            // Find matching day in original shifts
             var matchingIdx=-1;
             for(var od=0;od<cur.dates.length;od++){
               if(cur.dates[od].day===day){ matchingIdx=od; break; }
@@ -2403,10 +2631,18 @@ function addHiddenStaff(){
     var chk=document.getElementById('hs-constant-check'); if(chk) chk.checked=false;
     renderHiddenStaffPage();
     renderRosterSafe();
-    toast('Added hidden staff: '+first+' '+last+' '+(constant?'(Constant across all)':''));
-    try{ debouncedCloudSave(); }catch(e){}
+    toast('Added hidden staff: '+first+' '+last+' '+(constant?'(Constant across all)':'(This roster - now visible on main roster for admin)'));
+    try{ debouncedCloudSave(); cloudSave(); }catch(e){}
+    // Force cloud sync for LIVE
+    try{
+      var state=getAllState();
+      if(state && typeof db!=='undefined' && db && db.ref){
+        db.ref('repco_state').set(state);
+      }
+    }catch(e){}
   }catch(e){ console.error(e); toast('Error: '+e.message); }
 }
+
 function deleteHiddenStaff(idx){
   showCustomConfirm('Delete Hidden Staff?', 'Delete this hidden staff?', function(confirmed){
     if(!confirmed) return;
@@ -2624,9 +2860,95 @@ function onReqTypeChange(){
     area.innerHTML='<div style="background:#FFF6CC;border:2px dashed #111;border-radius:12px;padding:12px"><label style="font-weight:900;font-size:11px">SELECT SHIFT</label><select id="corr-shift-idx" style="width:100%;padding:10px;border-radius:9999px;border:2px solid #111;margin-top:4px">'+options+'</select><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px"><div><label style="font-weight:900;font-size:11px">NEW START</label><input id="corr-start" type="time" style="width:100%;padding:10px;border-radius:9999px;border:2px solid #111"></div><div><label style="font-weight:900;font-size:11px">NEW END</label><input id="corr-end" type="time" style="width:100%;padding:10px;border-radius:9999px;border:2px solid #111"></div></div><div style="margin-top:10px"><label style="font-weight:900;font-size:11px">OR SET AS</label><select id="corr-special" style="width:100%;padding:10px;border-radius:9999px;border:2px solid #111;margin-top:4px"><option value="">Use times above</option><option value="OFF">OFF</option><option value="AB">AB - Absent</option></select></div><div style="margin-top:10px"><label style="font-weight:900;font-size:11px">REASON (optional)</label><textarea id="corr-reason" placeholder="Reason (optional)" style="width:100%;padding:10px;border-radius:12px;border:2px solid #111;min-height:60px"></textarea></div><button onclick="submitCorrection()" style="margin-top:12px;background:#E30613;color:#fff;border:none;border-radius:9999px;padding:12px;font-weight:900;width:100%">SUBMIT</button></div>';
   } else { area.innerHTML=''; }
 }
+
 function submitUnavail(){
-  const startDate=document.getElementById('unavail-start-date')?.value; const endDate=document.getElementById('unavail-end-date')?.value; const manual=(document.getElementById('unavail-manual')?.value||'').trim(); const reason=(document.getElementById('unavail-reason')?.value||'').trim(); let dates=[]; if(startDate && endDate){ dates=expandDateRange(startDate, endDate); } else if(manual){ if(manual.includes('-')){ let parts=manual.split('-'); if(parts.length===2){ let s=parts[0].trim(); let e=parts[1].trim(); if(s.includes('/') && e.includes('/')){ dates=expandDateRange(s,e); } } } else { dates=manual.split(',').map(x=>x.trim()).filter(Boolean); } } if(dates.length===0){toast('Select dates');return;} const username=safeGet('repco_username')||''; let all=safeGetJSON('retail_roster_requests_v2',[]); all.push({username, type:'unavailability', dates, reason, status:'pending', ts:Date.now()}); safeSetJSON('retail_roster_requests_v2',all); toast('Submitted - admin notified live'); renderRequests();
+  try{
+    if(typeof updateActivity==='function') updateActivity();
+    const startDate=document.getElementById('unavail-start-date')?.value; 
+    const endDate=document.getElementById('unavail-end-date')?.value; 
+    const manual=(document.getElementById('unavail-manual')?.value||'').trim(); 
+    const reason=(document.getElementById('unavail-reason')?.value||'').trim(); 
+    let dates=[]; 
+    if(startDate && endDate){ dates=expandDateRange(startDate, endDate); } 
+    else if(manual){ 
+      if(manual.includes('-')){ 
+        let parts=manual.split('-'); 
+        if(parts.length===2){ 
+          let s=parts[0].trim(); 
+          let e=parts[1].trim(); 
+          if(s.includes('/') && e.includes('/')){ dates=expandDateRange(s,e); } 
+        } 
+      } else { 
+        dates=manual.split(',').map(x=>x.trim()).filter(Boolean); 
+      } 
+    } 
+    if(dates.length===0){toast('Select dates');return;} 
+    if(!reason){ toast('Enter reason'); return; }
+    const username=safeGet('repco_username')||''; 
+    let all=safeGetJSON('retail_roster_requests_v2',[]); 
+    var fnsAll=safeGetJSON('retail_roster_byFortnight_v1',[]);
+    var newCount=0;
+    dates.forEach(function(dateStr){
+      var iso='';
+      var fortnightId='';
+      for(var ff=0;ff<fnsAll.length;ff++){
+        var fn=fnsAll[ff];
+        if(!fn.dates) continue;
+        for(var dd=0;dd<fn.dates.length;dd++){
+          var d=fn.dates[dd];
+          if(d.date===dateStr || (d.date+' '+d.day)===dateStr || d.iso===dateStr){
+            iso=d.iso||'';
+            fortnightId=fn.id||'';
+            break;
+          }
+        }
+        if(iso) break;
+      }
+      var req={
+        id:'req_'+Date.now()+'_'+Math.random().toString(36).substr(2,9)+'_'+dateStr.replace(/[^0-9]/g,''),
+        type:'unavailability',
+        username:username,
+        dates:[dateStr],
+        shiftDate:dateStr,
+        shiftISO:iso,
+        dateLabel:dateStr,
+        reason:reason,
+        status:'pending',
+        readByAdmin:false,
+        readByStaff:true,
+        ts:Date.now(),
+        fortnightId:fortnightId,
+        oldShift:'OFF',
+        newShift:'NA'
+      };
+      all.push(req);
+      newCount++;
+    });
+    safeSetJSON('retail_roster_requests_v2',all);
+    try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
+    toast('Submitted '+newCount+' date(s) - Colour changed to PENDING, admin notified live');
+    try{ renderRequests(); }catch(e){}
+    try{ renderMySchedule(); }catch(e){}
+    try{ if(typeof updateRequestsBadge==='function') updateRequestsBadge(); }catch(e){}
+    setTimeout(function(){
+      try{
+        if(typeof debouncedCloudSave==='function') debouncedCloudSave();
+        if(typeof cloudSave==='function') cloudSave();
+        var state=null;
+        if(typeof getAllState==='function') state=getAllState();
+        if(state){
+          safeSet('repco_cloud_ts', String(state._ts||Date.now()));
+          if(typeof db!=='undefined' && db && db.ref){
+            db.ref('repco_state').set(state).then(function(){ toast('Synced - admin notified'); });
+          } else if(typeof FIREBASE_DB_URL!=='undefined'){
+            fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
+          }
+        }
+      }catch(e){}
+    },500);
+  }catch(e){ toast('Error: '+e.message); console.error(e); }
 }
+
 function submitCorrection(){
   const idxStr=document.getElementById('corr-shift-idx')?.value; const start=document.getElementById('corr-start')?.value; const end=document.getElementById('corr-end')?.value; const special=document.getElementById('corr-special')?.value; const reason=(document.getElementById('corr-reason')?.value||'').trim(); if(idxStr===''){toast('Select shift');return;} let newShift=''; if(special) newShift=special; else { if(!start||!end){toast('Enter times');return;} newShift=start+'-'+end; } const cur=getCurrentFortnight(); const username=safeGet('repco_username')||''; const myStaff=findMyStaff(cur); const idx=parseInt(idxStr); const oldShift=myStaff.shifts[idx]||'OFF'; const shiftDate=cur.dates[idx]?.date||''; let all=safeGetJSON('retail_roster_requests_v2',[]); all.push({username, type:'shift-correction', shiftDate, shiftIdx:idx, oldShift, newShift, reason, status:'pending', ts:Date.now(), dates:[shiftDate]}); safeSetJSON('retail_roster_requests_v2',all); toast('Submitted - admin notified live'); renderRequests();
 }
@@ -2810,17 +3132,83 @@ function addUnavailPeriod(){
 }
 
 function submitUnavailability(){
-  if(selectedUnavailDates.length===0){ toast('Select at least one date'); return; }
-  let reason=document.getElementById('unavail-reason').value.trim();
-  if(!reason){ toast('Enter reason'); return; }
-  let all=safeGetJSON('retail_roster_requests_v2',[]);
-  all.push({type:'unavailability', username:safeGet('repco_username'), dates:selectedUnavailDates.slice(), reason:reason, status:'pending', ts:Date.now()});
-  safeSetJSON('retail_roster_requests_v2',all);
-  selectedUnavailDates=[];
-  document.getElementById('unavail-reason').value='';
-  toast('Unavailability request submitted');
-  renderRequestsPage();
-  try{ debouncedCloudSave(); }catch(e){}
+  try{
+    if(typeof updateActivity==='function') updateActivity();
+    if(selectedUnavailDates.length===0){ toast('Select at least one date'); return; }
+    let reason=document.getElementById('unavail-reason').value.trim();
+    if(!reason){ toast('Enter reason'); return; }
+    let username=safeGet('repco_username')||'';
+    let all=safeGetJSON('retail_roster_requests_v2',[]);
+    // Create proper request with ID and fields for My Schedule pending logic and cross-device
+    var fnsAll=safeGetJSON('retail_roster_byFortnight_v1',[]);
+    var newRequests=[];
+    selectedUnavailDates.forEach(function(dateStr){
+      // Find ISO for this date
+      var iso='';
+      var fortnightId='';
+      for(var ff=0;ff<fnsAll.length;ff++){
+        var fn=fnsAll[ff];
+        if(!fn.dates) continue;
+        for(var dd=0;dd<fn.dates.length;dd++){
+          var d=fn.dates[dd];
+          if(d.date===dateStr || (d.date+' '+d.day)===dateStr){
+            iso=d.iso||'';
+            fortnightId=fn.id||'';
+            break;
+          }
+        }
+        if(iso) break;
+      }
+      var req={
+        id:'req_'+Date.now()+'_'+Math.random().toString(36).substr(2,9)+'_'+dateStr.replace(/[^0-9]/g,''),
+        type:'unavailability',
+        username:username,
+        dates:[dateStr],
+        shiftDate:dateStr,
+        shiftISO:iso,
+        dateLabel:dateStr,
+        datesFull:selectedUnavailDates.slice(),
+        reason:reason,
+        status:'pending',
+        readByAdmin:false,
+        readByStaff:true,
+        ts:Date.now(),
+        fortnightId:fortnightId,
+        oldShift:'OFF',
+        newShift:'NA'
+      };
+      all.push(req);
+      newRequests.push(req);
+    });
+    safeSetJSON('retail_roster_requests_v2',all);
+    try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
+    selectedUnavailDates=[];
+    var reasonEl=document.getElementById('unavail-reason');
+    if(reasonEl) reasonEl.value='';
+    // Instant UI updates - same logic as My Schedule shift correction
+    toast('Unavailability request submitted for '+newRequests.length+' date(s) - Colour changed to PENDING on My Schedule');
+    try{ if(typeof updateRequestsBadge==='function') updateRequestsBadge(); }catch(e){}
+    try{ renderMySchedule(); }catch(e){ console.error(e); }
+    try{ renderRequests(); }catch(e){}
+    try{ if(typeof renderRequestsPage==='function') renderRequestsPage(); }catch(e){}
+    // Cross-device sync for admin
+    setTimeout(function(){
+      try{
+        if(typeof debouncedCloudSave==='function') debouncedCloudSave();
+        if(typeof cloudSave==='function') cloudSave();
+        var state=null;
+        if(typeof getAllState==='function') state=getAllState();
+        if(state){
+          safeSet('repco_cloud_ts', String(state._ts||Date.now()));
+          if(typeof db!=='undefined' && db && db.ref){
+            db.ref('repco_state').set(state).then(function(){ console.log('Unavailability synced to cloud'); toast('Synced to cloud - admin will be notified'); });
+          } else if(typeof FIREBASE_DB_URL!=='undefined'){
+            fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
+          }
+        }
+      }catch(e){ console.error('Cloud sync error', e); }
+    },500);
+  }catch(e){ toast('Error: '+e.message); console.error(e); }
 }
 
 function submitShiftCorrection(){
@@ -3165,18 +3553,48 @@ function renderMySchedule(){
     var reqs=safeGetJSON('retail_roster_requests_v2',[]);
     var myUsername=(safeGet('repco_username')||'').toLowerCase();
     function findRequestForShift(dateObj, iso, idx){
+      // First check pending - highest priority
       for(var rr=0;rr<reqs.length;rr++){
         var r=reqs[rr];
         if(!r) continue;
         if(r.username && r.username.toLowerCase()!==myUsername) continue;
         if(r.status!=='pending') continue;
-        if(r.shiftISO && iso && r.shiftISO===iso) return {req:r, index:rr};
+        if(r.shiftISO && iso && r.shiftISO===iso) return {req:r, index:rr, status:'pending'};
         if(r.shiftDate){
           var sd=r.shiftDate;
-          if(sd===dateObj.date+' '+dateObj.day || sd===dateObj.date || dateObj.date+' '+dateObj.day===sd) return {req:r, index:rr};
-          if(iso && sd.indexOf(iso)!==-1) return {req:r, index:rr};
+          if(sd===dateObj.date+' '+dateObj.day || sd===dateObj.date || dateObj.date+' '+dateObj.day===sd) return {req:r, index:rr, status:'pending'};
+          if(iso && sd.indexOf(iso)!==-1) return {req:r, index:rr, status:'pending'};
         }
-        if(r.shiftIdx===idx && r.fortnightId && dateObj.fortnight && r.fortnightId===dateObj.fortnight.id) return {req:r, index:rr};
+        if(r.shiftIdx===idx && r.fortnightId && dateObj.fortnight && r.fortnightId===dateObj.fortnight.id) return {req:r, index:rr, status:'pending'};
+      }
+      // Then check approved within last 7 days - show as green approved
+      for(var rr=0;rr<reqs.length;rr++){
+        var r=reqs[rr];
+        if(!r) continue;
+        if(r.username && r.username.toLowerCase()!==myUsername) continue;
+        if(r.status!=='approved') continue;
+        // Only show approved if recent (last 14 days) or still matches current shift
+        var isRecent = r.approvedTs && (Date.now() - r.approvedTs) < 14*24*60*60*1000;
+        if(!isRecent) continue;
+        if(r.shiftISO && iso && r.shiftISO===iso) return {req:r, index:rr, status:'approved'};
+        if(r.shiftDate){
+          var sd=r.shiftDate;
+          if(sd===dateObj.date+' '+dateObj.day || sd===dateObj.date || dateObj.date+' '+dateObj.day===sd) return {req:r, index:rr, status:'approved'};
+        }
+      }
+      // Then check denied within last 7 days - show as denied (will revert to original)
+      for(var rr=0;rr<reqs.length;rr++){
+        var r=reqs[rr];
+        if(!r) continue;
+        if(r.username && r.username.toLowerCase()!==myUsername) continue;
+        if(r.status!=='denied') continue;
+        var isRecent = r.deniedTs && (Date.now() - r.deniedTs) < 7*24*60*60*1000;
+        if(!isRecent) continue;
+        if(r.shiftISO && iso && r.shiftISO===iso) return {req:r, index:rr, status:'denied'};
+        if(r.shiftDate){
+          var sd=r.shiftDate;
+          if(sd===dateObj.date+' '+dateObj.day || sd===dateObj.date || dateObj.date+' '+dateObj.day===sd) return {req:r, index:rr, status:'denied'};
+        }
       }
       return null;
     }
@@ -3237,8 +3655,18 @@ function renderMySchedule(){
     if(currentShift){
       var found=findRequestForShift(currentShift.date, currentShift.iso, currentShift.idx);
       if(found){
-        var pending=found.req; var reqIdx=found.index;
-        htmlStr+='<div class="card" style="background:#FFEB3B;border:3px solid #E30613;animation:pulse 1.5s infinite"><div style="font-weight:900;font-size:12px;color:#E30613">CURRENT SHIFT - PENDING APPROVAL - Colour changed instantly</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+currentShift.date.day+' '+currentShift.date.date+' - '+fmt(currentShift.shift)+' -> '+pending.newShift+'</div><div style="font-size:11px">Reason: '+(pending.reason||'')+'<br>Status: <b style="color:#E30613">PENDING</b> - Request submitted</div><div style="margin-top:8px;display:flex;gap:6px"><button onclick="editMyRequest('+reqIdx+')" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">EDIT REQUEST</button><button onclick="deleteMyRequest('+reqIdx+')" style="background:#E30613;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">CANCEL REQUEST</button></div></div>';
+        var reqData=found.req; var reqIdx=found.index; var reqStatus=found.status||reqData.status||'pending';
+        if(reqStatus==='approved'){
+          // Approved - green, no , show as actioned
+          htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111;"><div style="font-weight:900;font-size:12px;color:#111">CURRENT SHIFT - APPROVED & ACTIONED ✓</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+currentShift.date.day+' '+currentShift.date.date+' - '+fmt(reqData.oldShift||'')+' → '+fmt(reqData.newShift||currentShift.shift)+'</div><div style="font-size:11px">Reason: '+(reqData.reason||'')+'<br>Status: <b style="color:#111;background:#fff;border-radius:9999px;padding:2px 6px">APPROVED by '+(reqData.approvedBy||'admin')+'</b> - Shift updated</div><div style="margin-top:8px;font-size:10px;color:#666">This request has been approved and your roster has been updated. The green colour shows it\'s been actioned.</div></div>';
+        } else if(reqStatus==='denied'){
+          // Denied - grey, no , revert to original
+          htmlStr+='<div class="card" style="background:#E5E5E5;border:2px solid #111;"><div style="font-weight:900;font-size:12px;color:#E30613">CURRENT SHIFT - REJECTED / DENIED</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+currentShift.date.day+' '+currentShift.date.date+' - '+fmt(currentShift.shift)+'</div><div style="font-size:11px">Your request to change to '+(reqData.newShift||'')+' was <b>REJECTED / DENIED</b><br>Reason: '+(reqData.reason||'')+'<br>Status: <b style="color:#E30613">DENIED by '+(reqData.deniedBy||'admin')+'</b> - Reverted to original</div><div style="margin-top:8px;display:flex;gap:6px"><button onclick="deleteMyRequest('+reqIdx+')" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">ACKNOWLEDGE / DISMISS</button></div></div>';
+        } else {
+          // Pending - yellow, NO PULSE (as requested)
+          htmlStr+='<div class="card" style="background:#FFEB3B;border:3px solid #E30613;"><div style="font-weight:900;font-size:12px;color:#E30613">CURRENT SHIFT - PENDING APPROVAL</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+currentShift.date.day+' '+currentShift.date.date+' - '+fmt(currentShift.shift)+' -> '+fmt(reqData.newShift)+'</div><div style="font-size:11px">Reason: '+(reqData.reason||'')+'<br>Status: <b style="color:#E30613">PENDING</b> - Awaiting admin</div><div style="margin-top:8px;display:flex;gap:6px"><button onclick="editMyRequest('+reqIdx+')" style="background:#111;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">EDIT REQUEST</button><button onclick="deleteMyRequest('+reqIdx+')" style="background:#E30613;color:#fff;border-radius:9999px;padding:6px 12px;font-weight:900;font-size:10px">CANCEL REQUEST</button></div></div>';
+        }
+      } else {
       } else {
         var remaining=currentShift.end - brisbaneNow;
         var totalMin=Math.floor(remaining/60000);
@@ -3259,8 +3687,14 @@ function renderMySchedule(){
         var u=upcoming[i];
         var foundU=findRequestForShift(u.date, u.iso, u.idx);
         if(foundU){
-          var pending=foundU.req; var reqIdx=foundU.index;
-          htmlStr+='<div class="card" style="background:#FFEB3B;border:3px solid #E30613;animation:pulse 1s infinite"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+' -> <b style="color:#E30613">'+pending.newShift+'</b><br><span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">PENDING APPROVAL - Colour changed</span><br><small>Reason: '+(pending.reason||'')+'</small><div style="margin-top:6px;display:flex;gap:6px"><button onclick="editMyRequest('+reqIdx+')" style="background:#111;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">EDIT</button><button onclick="deleteMyRequest('+reqIdx+')" style="background:#E30613;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">CANCEL</button></div></div>';
+          var reqU=foundU.req; var reqIdx=foundU.index; var reqStatus=foundU.status||reqU.status||'pending';
+          if(reqStatus==='approved'){
+            htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111;"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(reqU.oldShift||'')+' → <b>'+fmt(reqU.newShift||u.shift)+'</b><br><span style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">APPROVED & ACTIONED ✓</span><br><small>Approved by '+(reqU.approvedBy||'admin')+'</small></div>';
+          } else if(reqStatus==='denied'){
+            htmlStr+='<div class="card" style="background:#E5E5E5;border:2px solid #111;"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+' <span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">REJECTED / DENIED</span><br><span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">REJECTED / DENIED</span> - Reverted to original<br><small>Request for '+fmt(reqU.newShift||'')+' <b>REJECTED / DENIED</b></small><div style="margin-top:6px"><button onclick="deleteMyRequest('+reqIdx+')" style="background:#111;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">DISMISS</button></div></div>';
+          } else {
+            htmlStr+='<div class="card" style="background:#FFEB3B;border:3px solid #E30613;"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+' -> <b style="color:#E30613">'+fmt(reqU.newShift)+'</b><br><span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px;font-weight:900">PENDING APPROVAL</span><br><small>Reason: '+(reqU.reason||'')+'</small><div style="margin-top:6px;display:flex;gap:6px"><button onclick="editMyRequest('+reqIdx+')" style="background:#111;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">EDIT</button><button onclick="deleteMyRequest('+reqIdx+')" style="background:#E30613;color:#fff;border-radius:9999px;padding:4px 8px;font-size:9px;font-weight:900">CANCEL</button></div></div>';
+          }
         } else {
           htmlStr+='<div class="card" style="cursor:pointer;border:2px solid #111" onclick="requestShiftCorrectionFromSchedule('+u.idx+', \''+u.date.date+' '+u.date.day+'\', \''+u.shift.replace(/\'/g, "\\'")+'\')"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+'<br><small style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px">TAP TO REQUEST EDIT</small></div>';
         }
@@ -3452,7 +3886,7 @@ function renderRequests(){
         var isUnread=!r.readByAdmin && r.status==='pending';
         var bg=isUnread?'#FFFBCC':'#fff';
         var border=isUnread?'3px solid #E30613':'2px solid #111';
-        var badge=r.status==='pending'?'<span style="background:#FFEB3B;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px;font-weight:900">PENDING</span>':(r.status==='approved'?'<span style="background:#B6F7C5;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px">APPROVED</span>':'<span style="background:#E5E5E5;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px">DENIED</span>');
+        var badge=r.status==='pending'?'<span style="background:#FFEB3B;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px;font-weight:900">PENDING</span>':(r.status==='approved'?'<span style="background:#B6F7C5;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px">APPROVED</span>':'<span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:8px;font-weight:900">REJECTED / DENIED</span>');
         if(isUnread) badge='<span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:8px;font-weight:900">NEW</span> '+badge;
         html+='<div class="card" style="padding:10px;background:'+bg+';border:'+border+'">';
         html+='<div style="font-weight:900;font-size:11px;display:flex;justify-content:space-between"><span>'+(r.type||'')+' - '+(r.username||'')+' - '+(r.shiftDate||'')+'</span>'+badge+'</div>';
@@ -3490,7 +3924,7 @@ function renderRequests(){
         var isResponseUnread=!r.readByStaff && (r.status==='approved' || r.status==='denied');
         var bg=isResponseUnread?'#B6F7C5':(r.status==='pending'?'#FFF6CC':'#fff');
         var border=isResponseUnread?'3px solid #111':'2px solid #111';
-        var badge=isResponseUnread?'<span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:8px;font-weight:900">NEW RESPONSE</span>':(r.status==='pending'?'<span style="background:#FFEB3B;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px">PENDING</span>':(r.status==='approved'?'<span style="background:#B6F7C5;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px">APPROVED</span>':'<span style="background:#E5E5E5;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px">DENIED</span>'));
+        var badge=isResponseUnread?'<span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:8px;font-weight:900">NEW RESPONSE</span>':(r.status==='pending'?'<span style="background:#FFEB3B;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px">PENDING</span>':(r.status==='approved'?'<span style="background:#B6F7C5;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px">APPROVED</span>':'<span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:8px;font-weight:900">REJECTED / DENIED</span>'));
         html+='<div class="card" style="padding:10px;background:'+bg+';border:'+border+'">';
         html+='<div style="font-weight:900;font-size:11px;display:flex;justify-content:space-between"><span>'+(r.type||'')+' - '+(r.shiftDate||'')+'</span>'+badge+'</div>';
         html+='<div style="font-size:10px;margin:4px 0">Old: '+(r.oldShift||'')+' -> New: '+(r.newShift||'')+'<br>Reason: '+(r.reason||'')+'<br>Status: <b>'+(r.status||'pending')+'</b> - '+new Date(r.ts||Date.now()).toLocaleString()+'</div>';
@@ -3663,7 +4097,7 @@ function updateRequestsBadge(){
         badge.style.display='inline-block';
         badge.style.background='#E30613';
         badge.style.color='#fff';
-        badge.style.animation='pulse 1s infinite';
+        badge.style.animation=' 1s infinite';
       } else {
         badge.textContent='';
         badge.style.display='none';
@@ -3672,7 +4106,7 @@ function updateRequestsBadge(){
     if(btn){
       if(unread>0){
         btn.classList.add('requests-has-new');
-        btn.style.animation='pulse 1.5s infinite, flash 1s infinite';
+        btn.style.animation=' 1.5s infinite, flash 1s infinite';
         btn.style.background='#FFFBCC';
         btn.style.border='3px solid #E30613';
       } else {
@@ -3893,8 +4327,7 @@ function renderUnavailablePage(){
     if(!el) return;
     var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
     var reqs=safeGetJSON('retail_roster_requests_v2',[]);
-    var html='<div class="card" style="background:#111;color:#fff;font-weight:900">STAFF UNAVAILABLE - ALL ROSTERS - ONLY UA/Unavailable</div>';
-    html+='<div class="card" style="padding:8px;background:#FFF6CC;border:2px solid #111;font-size:11px">Showing ALL staff marked as UA/Unavailable across ALL fortnights (not restricted to current/future)</div>';
+    var html='';
     // Approved UA requests
     var approved=reqs.filter(function(r){ return r && r.status==='approved' && (r.type==='unavailability' || (r.newShift && ['NA','UA','UNAVAILABLE'].includes(r.newShift.toUpperCase()))); });
     if(approved.length>0){
@@ -3945,7 +4378,7 @@ function renderUnavailablePage(){
         html+='<div class="card" style="padding:10px"><div style="font-weight:900;font-size:11px">'+name+' - UA/Unavailable ('+entry.entries.length+' days)</div><div style="font-size:10px;margin-top:6px">'+entry.entries.map(function(e){ return e.label; }).join('<br>')+'</div></div>';
       }
       if(!hasAny){
-        html+='<div class="card" style="padding:10px">No staff currently marked as UA/Unavailable across any roster<br><br>Staff with NA/UA in any fortnight will appear here regardless of current/future dates.</div>';
+        html+='<div class="card" style="padding:10px">No staff currently marked as UA/Unavailable across any roster<br><br></div>';
       } else {
         html+='<div class="card" style="padding:8px;background:#E5E5E5;font-size:10px;font-weight:900">Total staff with UA: '+Object.keys(staffMap).filter(function(k){ return staffMap[k].entries.length>0; }).length+' | Total UA entries: '+Object.keys(staffMap).reduce(function(acc,k){ return acc+staffMap[k].entries.length; },0)+' across '+sortedFns.length+' fortnights</div>';
       }
