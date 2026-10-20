@@ -213,7 +213,7 @@ document.addEventListener('keydown', function(e){ if(e.key==='Escape'){ const m=
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022700060_V147_EDIT_FIX";
+const BUILD_ID="20261022700070_V148_G_EDIT_FIX";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -831,41 +831,86 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
       return;
     }
     var current=staff.shifts[colIdx]||'OFF';
+    var isCurrentlyG = (staff.cellGreen && staff.cellGreen[colIdx]) || (staff.cellG && staff.cellG[colIdx]);
+    var displayCurrent = current;
+    if(isCurrentlyG && current && current.toUpperCase()!=='OFF' && current!=='') displayCurrent = current + ' G';
+    else if(isCurrentlyG && (current.toUpperCase()==='OFF' || current==='')) displayCurrent = 'G';
     var draft=getEditDraft();
-    var initialValue=current;
+    var initialValue=displayCurrent;
     if(draft && draft.rowIdx===rowIdx && draft.colIdx===colIdx && (Date.now()-draft.ts)<24*60*60*1000){
       initialValue=draft.value;
     }
-    showCustomPrompt('Edit Shift', '<div style="font-size:11px">Edit shift for '+staff.firstName+' '+staff.lastName+' on '+cur.dates[colIdx].day+' '+cur.dates[colIdx].date+'<br>Current: '+current+(initialValue!==current?' <br><b style="color:#E30613">Unsaved draft: '+initialValue+'</b>':'')+'</div><input id="edit-shift-input" value="'+initialValue.replace(/"/g,'&quot;')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;margin-top:8px"><div style="font-size:9px;color:#666;margin-top:6px">Auto-saves while typing. If timed out or refreshed, draft is restored.</div>', function(val){
-      if(val===null){ return; }
+    showCustomPrompt('Edit Shift', '<div style="font-size:11px">Edit shift for '+staff.firstName+' '+staff.lastName+' on '+cur.dates[colIdx].day+' '+cur.dates[colIdx].date+'<br>Current: '+current+(isCurrentlyG?' (Manager)':'')+(initialValue!==current?' <br><b style="color:#E30613">Unsaved draft: '+initialValue+'</b>':'')+'<br><small>Type time (e.g. 11:00-17:30) or add G for Manager (e.g. 11:00-17:30 G or just G to toggle green)</small></div><input id="edit-shift-input" value="'+String(initialValue).replace(/"/g,'&quot;')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;margin-top:8px"><div style="font-size:9px;color:#666;margin-top:6px">Press Enter to save. Auto-saves while typing.</div>', function(val){
+      if(val===null){ clearEditDraft(); return; }
       var rawVal = (typeof val === 'string') ? val : (document.getElementById('edit-shift-input')?.value || '');
       var newVal=String(rawVal).trim();
       if(!newVal) newVal='OFF';
-      if(!staff.originalShifts) staff.originalShifts=[];
+      var upper=newVal.toUpperCase();
+      var isG=false;
+      var cleanVal=newVal;
+      // Case: just "G" alone -> toggle green on existing shift
+      if(upper==='G'){
+        isG=true;
+        cleanVal=current;
+        if(!cleanVal || cleanVal.toUpperCase()==='OFF' || cleanVal==='') cleanVal='OFF';
+        // If already green, typing G again removes green? Let's make it toggle off? No, keep green. To remove green, type time without G.
+        // So G alone = make green
+      } else if(upper.includes('G')){
+        // Contains G, e.g. "11:00-17:30 G" or "G 11:00-17:30"
+        isG=true;
+        cleanVal=newVal.replace(/G/gi,'').trim().replace(/\s{2,}/g,' ').trim();
+        if(!cleanVal) cleanVal=current||'OFF';
+        if(cleanVal.toUpperCase()==='OFF' && current && current.toUpperCase()!=='OFF') cleanVal=current;
+      } else {
+        isG=false;
+        cleanVal=newVal;
+      }
+      if(!cleanVal) cleanVal='OFF';
+      if(!staff.originalShifts) staff.originalShifts={};
       if(!staff.originalShifts[colIdx]) staff.originalShifts[colIdx]=staff.shifts[colIdx];
-      if(!staff.originalShifts) staff.originalShifts=[]; if(!staff.originalShifts[colIdx]) staff.originalShifts[colIdx]=staff.shifts[colIdx];
-      // Fix totals bug - update fns array properly
-      var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
-      var fnIdx=fns.findIndex(function(f){return f.id===cur.id;});
-      if(fnIdx!==-1){
-        var targetStaff=fns[fnIdx].staff[rowIdx];
-        if(targetStaff){
-          if(!targetStaff.originalShifts) targetStaff.originalShifts={};
-          if(!targetStaff.originalShifts[colIdx]) targetStaff.originalShifts[colIdx]=targetStaff.shifts[colIdx];
-          targetStaff.shifts[colIdx]=newVal;
-          if(newVal.toUpperCase()==='AB' || newVal.toUpperCase()==='ABSENT'){
-            if(!targetStaff.absentApproved) targetStaff.absentApproved=[];
-            targetStaff.absentApproved[colIdx]=true;
-          } else {
-            if(targetStaff.absentApproved) targetStaff.absentApproved[colIdx]=false;
+      if(!staff.cellGreen) staff.cellGreen={};
+      if(!staff.cellG) staff.cellG={};
+      staff.shifts[colIdx]=cleanVal;
+      staff.cellGreen[colIdx]= isG && cleanVal.toUpperCase()!=='OFF' && cleanVal!=='' ? true : (cleanVal.toUpperCase()==='OFF' && upper==='G' ? true : false);
+      // Special: if user typed just G and original was OFF, keep green flag even if OFF, so cell shows green
+      if(upper==='G'){
+        staff.cellGreen[colIdx]=true;
+        staff.cellG[colIdx]=true;
+        if(staff.shifts[colIdx].toUpperCase()==='OFF'){
+          // Keep shift as OFF but green flag true, render will show green
+        }
+      } else {
+        staff.cellG[colIdx]= staff.cellGreen[colIdx];
+      }
+      if(cleanVal.toUpperCase()==='AB' || cleanVal.toUpperCase()==='ABSENT'){
+        if(!staff.absentApproved) staff.absentApproved={};
+        staff.absentApproved[colIdx]=true;
+      } else {
+        if(staff.absentApproved) staff.absentApproved[colIdx]=false;
+      }
+      try{
+        var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+        var fnIdx=fns.findIndex(function(f){return f.id===cur.id;});
+        if(fnIdx!==-1){
+          var targetStaff=fns[fnIdx].staff[rowIdx];
+          if(targetStaff){
+            if(!targetStaff.originalShifts) targetStaff.originalShifts={};
+            if(!targetStaff.originalShifts[colIdx]) targetStaff.originalShifts[colIdx]=targetStaff.shifts[colIdx];
+            if(!targetStaff.cellGreen) targetStaff.cellGreen={};
+            if(!targetStaff.cellG) targetStaff.cellG={};
+            targetStaff.shifts[colIdx]=cleanVal;
+            targetStaff.cellGreen[colIdx]= staff.cellGreen[colIdx];
+            targetStaff.cellG[colIdx]= staff.cellG[colIdx];
+            if(!targetStaff.absentApproved) targetStaff.absentApproved={};
+            targetStaff.absentApproved[colIdx]= (cleanVal.toUpperCase()==='AB' || cleanVal.toUpperCase()==='ABSENT');
           }
         }
-      }
-      safeSetJSON('retail_roster_byFortnight_v1',fns);
-      clearEditDraft();
-      if(typeof updateActivity==='function') updateActivity();
+        safeSetJSON('retail_roster_byFortnight_v1',fns);
+        try{ safeSet('repco_cloud_ts', String(Date.now())); if(typeof cloudSave==='function') cloudSave(); }catch(e){}
+      }catch(e){ console.error('save fns', e); }
       renderRosterSafe();
-      toast('Shift updated: '+newVal+' (auto-saved)');
+      clearEditDraft();
+      toast('Saved: '+cleanVal+(isG?' 👑 Manager (green)':'')); 
     });
     setTimeout(function(){
       var inp=document.getElementById('edit-shift-input');
@@ -874,11 +919,18 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
           if(typeof updateActivity==='function') updateActivity();
           var v=inp.value;
           saveEditDraft(rowIdx, colIdx, v, staff.firstName+' '+staff.lastName, cur.dates[colIdx].day+' '+cur.dates[colIdx].date);
-          if(draftSaveTimeout) clearTimeout(draftSaveTimeout);
-          draftSaveTimeout=setTimeout(function(){
+          if(window.draftSaveTimeout) clearTimeout(window.draftSaveTimeout);
+          window.draftSaveTimeout=setTimeout(function(){
             var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
             if(fns) safeSetJSON('retail_roster_backup_autosave_v1', {fns:fns, ts:Date.now(), by:safeGet('repco_username')||'', reason:'typing_autosave'});
           }, 2000);
+        });
+        inp.addEventListener('keydown', function(e){
+          if(e.key==='Enter'){
+            e.preventDefault();
+            var okBtn=document.getElementById('custom-modal-ok');
+            if(okBtn) okBtn.click();
+          }
         });
         saveEditDraft(rowIdx, colIdx, inp.value, staff.firstName+' '+staff.lastName, cur.dates[colIdx].day+' '+cur.dates[colIdx].date);
         inp.focus();
