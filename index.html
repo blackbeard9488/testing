@@ -361,7 +361,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022300000_FIX_DELETE_SYNC_V34";
+const BUILD_ID="20261022350000_HIDDEN_IN_PH_V39";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -2389,11 +2389,30 @@ function denyReq(i){
     let r=reqs[i];
     if(!r) return;
     var oldShift=r.oldShift||'';
+    var reqId=r.id;
+    var reqDate=r.shiftDate||'';
+    var reqIso=r.shiftISO||'';
+    var reqIdx=r.shiftIdx;
+    // Mark as denied
     r.status='denied';
     r.readByStaff=false;
     r.readByAdmin=true;
     r.deniedBy=safeGet('repco_username')||'admin';
     r.deniedTs=Date.now();
+    // Also remove any other pending requests for same date/user that would cause pending to show
+    for(var j=reqs.length-1;j>=0;j--){
+      if(j===i) continue;
+      var other=reqs[j];
+      if(!other) continue;
+      if(other.username && r.username && other.username.toLowerCase()!==r.username.toLowerCase()) continue;
+      if(other.status!=='pending') continue;
+      // If same date, remove the duplicate pending
+      if(other.shiftDate===reqDate || other.shiftISO===reqIso || (typeof other.shiftIdx==='number' && other.shiftIdx===reqIdx)){
+        console.log('Removing duplicate pending request for same date:', other.id);
+        reqs.splice(j,1);
+        if(j<i) i--; // Adjust index if we removed before
+      }
+    }
     safeSetJSON('retail_roster_requests_v2',reqs);
     try{ localStorage.setItem('retail_roster_requests_update_ts', String(Date.now())); }catch(e){}
     try{ updateRequestsBadge(); }catch(e){}
@@ -2401,7 +2420,7 @@ function denyReq(i){
     try{ renderMySchedule(); }catch(e){}
     try{ renderRosterSafe(); }catch(e){}
     try{ if(typeof updateRequestsBadge==='function') updateRequestsBadge(); }catch(e){}
-    // Immediate cloud sync for cross-device - employee schedule should revert instantly
+    // Immediate cloud sync for cross-device - employee schedule should revert instantly and show REJECTED
     try{
       if(typeof debouncedCloudSave==='function') debouncedCloudSave();
       if(typeof cloudSave==='function') cloudSave();
@@ -2411,14 +2430,14 @@ function denyReq(i){
         safeSet('repco_cloud_ts', String(state._ts||Date.now()));
         if(typeof db!=='undefined' && db && db.ref){
           db.ref('repco_state').set(state).then(function(){
-            console.log('Denied request synced to cloud - employee schedule will revert');
+            console.log('Denied request synced to cloud - employee will see REJECTED instantly, id:', reqId);
           });
         } else if(typeof FIREBASE_DB_URL!=='undefined'){
           fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
         }
       }
     }catch(e){ console.error('Cloud sync error on deny', e); }
-    toast('Denied - Employee schedule will revert to '+oldShift+' (was '+r.newShift+')');
+    toast('Denied - Employee will now see REJECTED/DENIED for '+oldShift+' (was '+r.newShift+') - Pending cleared');
   }catch(e){ toast('Error: '+e.message); console.error(e); }
 }
 
@@ -2747,11 +2766,22 @@ function openCreatePublicHolidayModal(editId){
         if(!allStaffMap[key]) allStaffMap[key]=st;
       }
     }
+    // Include hidden staff from hidden staff list - so hidden employees can be added to public holiday shifts
+    try{
+      var hiddenStaffList=safeGetJSON('retail_roster_hidden_staff_v1',[]);
+      for(var hs=0;hs<hiddenStaffList.length;hs++){
+        var h=hiddenStaffList[hs];
+        if(!h) continue;
+        var key=(h.username|| (h.firstName+'_'+h.lastName)).toLowerCase();
+        if(!allStaffMap[key]){
+          allStaffMap[key]={firstName:h.firstName,lastName:h.lastName,username:h.username||'',type:h.type||'casual',hidden:true,employmentType:h.type||'casual'};
+        }
+      }
+    }catch(e){ console.log('hidden staff include error', e); }
     var allStaff=Object.values(allStaffMap).sort(function(a,b){ return (a.lastName||'').localeCompare(b.lastName||''); });
-    var staffOptions=allStaff.map(function(st){ return '<option value="'+(st.username||'')+'" data-first="'+(st.firstName||'')+'" data-last="'+(st.lastName||'')+'">'+(st.lastName||'')+', '+(st.firstName||'')+' ('+(st.username||'')+')</option>'; }).join('');
-    var areas=['Counter','Workshop','Office','Delivery','Stock','Front','Back','Other'];
-    var areaOptions=areas.map(function(a){ return '<option value="'+a+'">'+a+'</option>'; }).join('');
-    var modalHtml='<div style="font-size:11px"><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label style="font-weight:900;font-size:9px">DATE (ISO e.g. 2026-01-26)</label><input id="ph-date-iso" type="date" value="'+(editing?editing.dateISO:'')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111"></div><div><label style="font-weight:900;font-size:9px">PUBLIC HOLIDAY NAME</label><input id="ph-name" placeholder="e.g. Australia Day" value="'+(editing?editing.name:'')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111"></div></div><div style="margin-top:12px"><label style="font-weight:900;font-size:11px">ALLOCATE STAFF FOR THIS PUBLIC HOLIDAY</label><div style="margin-top:8px;display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:6px;align-items:end"><div><label style="font-size:9px">Staff</label><select id="ph-staff-select" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px"><option value="">Select staff</option>'+staffOptions+'</select></div><div><label style="font-size:9px">Times e.g. 08:00-16:00</label><input id="ph-shift" placeholder="08:00-16:30" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px"></div><div><label style="font-size:9px">Area</label><select id="ph-area" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px"><option value="">Area</option>'+areaOptions+'</select></div><div><button onclick="addPublicHolidayStaffRow()" style="background:#111;color:#fff;border-radius:9999px;padding:6px 10px;font-weight:900;font-size:10px">ADD</button></div></div><div id="ph-staff-list" style="margin-top:10px;max-height:200px;overflow:auto"></div></div><div style="margin-top:8px;font-size:9px;color:#666">Staff NOT listed will automatically be OFF on this date. Original shifts saved and restored if holiday deleted.</div></div>';
+    var staffOptions=allStaff.map(function(st){ var key=((st.firstName||'')+'_'+(st.lastName||'')).toLowerCase().trim(); if(!key || key==='_') key=(st.username||'').toLowerCase()||Math.random().toString(36).substr(2,6); var hiddenTag=st.hidden?' [HIDDEN]':''; return '<option value="'+key+'" data-username="'+(st.username||'')+'" data-first="'+(st.firstName||'')+'" data-last="'+(st.lastName||'')+'" data-hidden="'+(st.hidden?'true':'')+'">'+(st.lastName||'')+', '+(st.firstName||'')+hiddenTag+'</option>'; }).join('');
+    // Area now editable text field for custom area names - no predefined options
+    var modalHtml='<div style="font-size:11px"><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label style="font-weight:900;font-size:9px">DATE (ISO e.g. 2026-01-26)</label><input id="ph-date-iso" type="date" value="'+(editing?editing.dateISO:'')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111"></div><div><label style="font-weight:900;font-size:9px">PUBLIC HOLIDAY NAME</label><input id="ph-name" placeholder="e.g. Australia Day" value="'+(editing?editing.name:'')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111"></div></div><div style="margin-top:12px"><label style="font-weight:900;font-size:11px">ALLOCATE STAFF FOR THIS PUBLIC HOLIDAY</label><div style="margin-top:8px;display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:6px;align-items:end"><div><label style="font-size:9px">Staff</label><select id="ph-staff-select" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px"><option value="">Select staff</option>'+staffOptions+'</select></div><div><label style="font-size:9px">Times e.g. 08:00-16:00</label><input id="ph-shift" placeholder="08:00-16:30" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px"></div><div><label style="font-size:9px">Area (custom)</label><input id="ph-area" placeholder="e.g. Counter, Workshop, custom area" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px"></div><div><button onclick="addPublicHolidayStaffRow()" style="background:#111;color:#fff;border-radius:9999px;padding:6px 10px;font-weight:900;font-size:10px">ADD</button></div></div><div id="ph-staff-list" style="margin-top:10px;max-height:200px;overflow:auto"></div></div><div style="margin-top:8px;font-size:9px;color:#666">Staff NOT listed will automatically be OFF on this date. Original shifts saved and restored if holiday deleted.</div></div>';
     showCustomConfirm(editing?'Edit Public Holiday: '+(editing.name||editing.dateISO):'Create Public Holiday', modalHtml, function(confirmed){
       if(!confirmed) return;
       var dateIso=document.getElementById('ph-date-iso')?.value||'';
@@ -2823,21 +2853,32 @@ function addPublicHolidayStaffRow(){
     var area=document.getElementById('ph-area');
     if(!sel || !sel.value){ toast('Select staff'); return; }
     var opt=sel.options[sel.selectedIndex];
+    if(!opt || opt.value===''){ toast('Select staff'); return; }
     var first=opt.getAttribute('data-first')||'';
     var last=opt.getAttribute('data-last')||'';
-    var username=sel.value||'';
+    var username=opt.getAttribute('data-username')||sel.value||'';
+    var key=sel.value||'';
     var shiftVal=(shift?.value||'').trim()||'08:00-16:30';
     var areaVal=(area?.value||'').trim()||'';
-    // Check duplicate
-    if(tempPublicHolidayStaff.find(function(sa){ return sa.username && username && sa.username.toLowerCase()===username.toLowerCase(); })){
+    // Check duplicate by username or by first+last
+    if(tempPublicHolidayStaff.find(function(sa){ 
+      var saUser=(sa.username||'').toLowerCase();
+      var checkUser=(username||'').toLowerCase();
+      if(saUser && checkUser && saUser===checkUser) return true;
+      if(sa.firstName && sa.lastName && first && last){
+        if(sa.firstName.toLowerCase()===first.toLowerCase() && sa.lastName.toLowerCase()===last.toLowerCase()) return true;
+      }
+      return false;
+    })){
       toast('Staff already added'); return;
     }
-    tempPublicHolidayStaff.push({firstName:first,lastName:last,username:username,shift:shiftVal,area:areaVal});
+    tempPublicHolidayStaff.push({firstName:first,lastName:last,username:username||key,shift:shiftVal,area:areaVal,key:key});
     renderTempPublicHolidayStaffList();
     if(sel) sel.value='';
     if(shift) shift.value='';
     if(area) area.value='';
-  }catch(e){ toast('Error: '+e.message); }
+    toast('Added: '+last+', '+first+' - '+shiftVal+' '+(areaVal?'['+areaVal+']':''));
+  }catch(e){ toast('Error: '+e.message); console.error(e); }
 }
 
 function removeTempPublicHolidayStaff(idx){
@@ -4106,9 +4147,29 @@ function renderMySchedule(){
     }catch(e){}
     var reqs=safeGetJSON('retail_roster_requests_v2',[]);
     var myUsername=(safeGet('repco_username')||'').toLowerCase();
-    function findRequestForShift(dateObj, iso, idx){
+        function findRequestForShift(dateObj, iso, idx){
       // FIXED: Check denied/approved FIRST so actioned requests take priority over pending - prevents pending showing after deny
-      // Check denied within last 14 days - show as Rejected/Denied (will revert to original) - HIGHEST PRIORITY
+      // Robust matching: check multiple date formats and contains
+      function datesMatch(sd, dateObj, iso){
+        if(!sd || !dateObj) return false;
+        var dateStr=dateObj.date||'';
+        var dayStr=dateObj.day||'';
+        // Exact matches
+        if(sd===dateStr+' '+dayStr) return true;
+        if(sd===dayStr+' '+dateStr) return true;
+        if(sd===dateStr) return true;
+        if(sd===dayStr) return true;
+        if(dateStr+' '+dayStr===sd) return true;
+        if(dayStr+' '+dateStr===sd) return true;
+        // Contains
+        if(dateStr && sd.indexOf(dateStr)!==-1) return true;
+        if(dayStr && dateStr && sd.indexOf(dateStr)!==-1 && sd.indexOf(dayStr)!==-1) return true;
+        if(iso && sd.indexOf(iso)!==-1) return true;
+        if(iso && dateStr && iso.indexOf(dateStr)!==-1) return true;
+        return false;
+      }
+      
+      // Check denied within last 14 days - HIGHEST PRIORITY - shows REJECTED/DENIED
       for(var rr=0;rr<reqs.length;rr++){
         var r=reqs[rr];
         if(!r) continue;
@@ -4122,15 +4183,11 @@ function renderMySchedule(){
         }
         if(!isRecent) continue;
         if(r.shiftISO && iso && r.shiftISO===iso) return {req:r, index:rr, status:'denied'};
-        if(r.shiftDate){
-          var sd=r.shiftDate;
-          if(sd===dateObj.date+' '+dateObj.day || sd===dateObj.date || dateObj.date+' '+dateObj.day===sd) return {req:r, index:rr, status:'denied'};
-          if(iso && sd.indexOf(iso)!==-1) return {req:r, index:rr, status:'denied'};
-        }
+        if(r.shiftDate && datesMatch(r.shiftDate, dateObj, iso)) return {req:r, index:rr, status:'denied'};
         if(typeof r.shiftIdx==='number' && r.shiftIdx===idx) return {req:r, index:rr, status:'denied'};
         if(r.fortnightId && dateObj.fortnight && r.fortnightId===dateObj.fortnight.id && r.shiftIdx===idx) return {req:r, index:rr, status:'denied'};
       }
-      // Then check approved within last 14 days - show as green approved and actioned
+      // Then check approved within last 14 days - green approved and actioned
       for(var rr=0;rr<reqs.length;rr++){
         var r=reqs[rr];
         if(!r) continue;
@@ -4144,11 +4201,7 @@ function renderMySchedule(){
         }
         if(!isRecent) continue;
         if(r.shiftISO && iso && r.shiftISO===iso) return {req:r, index:rr, status:'approved'};
-        if(r.shiftDate){
-          var sd=r.shiftDate;
-          if(sd===dateObj.date+' '+dateObj.day || sd===dateObj.date || dateObj.date+' '+dateObj.day===sd) return {req:r, index:rr, status:'approved'};
-          if(iso && sd.indexOf(iso)!==-1) return {req:r, index:rr, status:'approved'};
-        }
+        if(r.shiftDate && datesMatch(r.shiftDate, dateObj, iso)) return {req:r, index:rr, status:'approved'};
         if(typeof r.shiftIdx==='number' && r.shiftIdx===idx) return {req:r, index:rr, status:'approved'};
         if(r.fortnightId && dateObj.fortnight && r.fortnightId===dateObj.fortnight.id && r.shiftIdx===idx) return {req:r, index:rr, status:'approved'};
       }
@@ -4159,11 +4212,7 @@ function renderMySchedule(){
         if(r.username && r.username.toLowerCase()!==myUsername) continue;
         if(r.status!=='pending') continue;
         if(r.shiftISO && iso && r.shiftISO===iso) return {req:r, index:rr, status:'pending'};
-        if(r.shiftDate){
-          var sd=r.shiftDate;
-          if(sd===dateObj.date+' '+dateObj.day || sd===dateObj.date || dateObj.date+' '+dateObj.day===sd) return {req:r, index:rr, status:'pending'};
-          if(iso && sd.indexOf(iso)!==-1) return {req:r, index:rr, status:'pending'};
-        }
+        if(r.shiftDate && datesMatch(r.shiftDate, dateObj, iso)) return {req:r, index:rr, status:'pending'};
         if(r.shiftIdx===idx && r.fortnightId && dateObj.fortnight && r.fortnightId===dateObj.fortnight.id) return {req:r, index:rr, status:'pending'};
         if(typeof r.shiftIdx==='number' && r.shiftIdx===idx) return {req:r, index:rr, status:'pending'};
       }
@@ -4618,9 +4667,9 @@ function applyRoleVisibility(){
   document.querySelectorAll('.r-btn-consistent').forEach(function(btn){ if(btn.textContent.trim().toUpperCase()==='ARCHIVE'){ btn.style.display='none'; } });
   // Admin sees: roster, requests, staff unavailable, options, hidden staff. Hides today/tomorrow/mysched/archive
   // Staff sees: today, tomorrow, mysched, requests, account, roster
-  var adminHiddenIds=['btn-today','btn-tomorrow','btn-mysched','btn-archive'];
-  var staffHiddenIds=['btn-unavail','btn-options','btn-hidden','btn-archive'];
-  var allIds=['btn-unavail','btn-today','btn-tomorrow','btn-mysched','btn-options','btn-archive','btn-account','btn-hidden','btn-requests','btn-roster'];
+  var adminHiddenIds=['btn-today','btn-tomorrow','btn-mysched','btn-archive']; // public holiday visible for admin
+  var staffHiddenIds=['btn-unavail','btn-options','btn-hidden','btn-archive','btn-public-holiday'];
+  var allIds=['btn-unavail','btn-today','btn-tomorrow','btn-mysched','btn-options','btn-archive','btn-account','btn-hidden','btn-public-holiday','btn-requests','btn-roster'];
   allIds.forEach(function(id){
     var el=document.getElementById(id);
     if(!el) return;
@@ -4644,7 +4693,10 @@ function applyRoleVisibility(){
       hrsCols.forEach(function(el){ el.style.display=''; });
     }
   }catch(e){}
+
+  try{ var phBtn=document.getElementById('btn-public-holiday'); if(phBtn){ var role=getActualRole(); var isAdmin=isManagerRole(role)||isAdminUser(); phBtn.style.display=isAdmin?'':'none'; } }catch(e){}
 }
+
 
 
 
