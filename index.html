@@ -263,6 +263,56 @@ button, .r-btn-consistent{
     font-weight:900 !important;
   }
 }
+
+/* Mobile hamburger menu - compact, doesn't cover pages */
+#mobile-menu-toggle{display:none !important;}
+@media (max-width: 768px){
+  #mobile-menu-toggle{display:flex !important;}
+  #global-header{
+    padding:8px 10px !important;
+    gap:8px !important;
+    position:fixed !important;
+    max-height:60vh;
+    overflow-y:auto;
+  }
+  #global-header .r-title-consistent{font-size:16px !important; width:auto !important; flex:1;}
+  #global-header .r-btns-consistent{
+    display:none !important;
+    flex-direction:column !important;
+    width:100% !important;
+    gap:6px !important;
+    margin-top:8px !important;
+    max-height:45vh;
+    overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
+  }
+  #global-header.mobile-open .r-btns-consistent{
+    display:flex !important;
+  }
+  #global-header .r-btn-consistent{
+    width:100% !important;
+    justify-content:flex-start !important;
+    padding:14px 16px !important;
+    font-size:13px !important;
+    min-height:48px !important;
+    text-align:left !important;
+  }
+  /* When menu closed, header is small */
+  #global-header:not(.mobile-open){
+    max-height:60px !important;
+    overflow:hidden !important;
+  }
+  /* Pages padding - account for small header, not full menu */
+  .full-page, #repco-v65{
+    padding-top:70px !important;
+  }
+  .page-inner{padding-top:20px !important;}
+}
+
+/* Desktop keeps normal */
+@media (min-width: 769px){
+  #global-header .r-btns-consistent{display:flex !important;}
+}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js">
 function openAdmin(){ const m=document.getElementById("admin-modal"); if(m){ m.classList.add("show"); m.style.display="flex"; } }
@@ -447,7 +497,7 @@ body:not(.is-admin) .daily-total-casual {
   
 </div>
 <button id="admin-cog" onclick="openAdmin()" title="Admin Maintenance" style="position:absolute;bottom:18px;left:18px;z-index:1000000;width:32px;height:32px;border:none;background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate(-10deg)"><circle cx="14" cy="10" r="3" stroke-width="1.2"/><path d="M14 7.5V6M14 14V12.5M11.2 8.2L10.2 7.2M16.8 12.8L17.8 13.8M10.5 10H9M17 10H18.5M11.2 11.8L10.2 12.8M16.8 7.2L17.8 6.2"/><path d="M7 16L3 20M6 19L8 17C8 17 9.5 18.5 11 18.5C12.5 18.5 13 17 13 17L11 15C11 15 9.5 15.5 8 14C6.5 12.5 7 11 7 11L5 13C5 13 3.5 13.5 3.5 15C3.5 16.5 5 18 5 18L7 16Z" fill="white" stroke="#000"/></svg></button></div><div id="global-header">
-<div class="r-title-consistent"><span>REPCO</span> ROSTER</div><div class="r-btns-consistent">
+<div style="display:flex;align-items:center;justify-content:space-between;width:100%;gap:10px"><div class="r-title-consistent"><span>REPCO</span> ROSTER</div><button id="mobile-menu-toggle" onclick="toggleMobileMenu()" style="display:none;background:#111;color:#fff;border:none;border-radius:9999px;width:44px;height:44px;font-weight:900;font-size:18px;align-items:center;justify-content:center">☰</button></div><div class="r-btns-consistent">
 <button class="r-btn-consistent active" id="btn-roster" onclick="showMain()">ROSTER</button>
 <button class="r-btn-consistent" id="btn-requests" onclick="openPage('requests-page')">REQUESTS</button>
 <button class="r-btn-consistent" id="btn-unavail" onclick="openPage('unavail-page')">STAFF UNAVAILABLE</button>
@@ -530,7 +580,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022370000_FIX_DANIEL_DENIED_V41";
+const BUILD_ID="20261022400000_FIX_PH_SAVE_AND_FORCE_STATUS_V44";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -748,50 +798,11 @@ function applyCloudState(state,isInitial){
         for(var ri=0;ri<toRemove.length;ri++){
           merged.splice(toRemove[ri],1);
         }
-        
-        // AGGRESSIVE: If cloud has denied/approved, remove any pending for same user+date that would cause PENDING to show instead of DENIED
-        var actionedDates={};
-        for(var ad=0;ad<merged.length;ad++){
-          var ar=merged[ad];
-          if(!ar) continue;
-          if(ar.status==='denied'||ar.status==='rejected'||ar.status==='approved'){
-            var aKey=(ar.username||'').toLowerCase()+'|'+(ar.shiftDate||'')+'|'+(ar.shiftISO||'')+'|'+(ar.shiftIdx!==undefined?ar.shiftIdx:'');
-            // Also add date-only keys for robust matching
-            var dateOnly='';
-            if(ar.shiftDate){
-              var m=ar.shiftDate.match(/(\d{1,2}\/\d{1,2})/);
-              if(m) dateOnly=m[1];
-            }
-            if(dateOnly){
-              actionedDates[(ar.username||'').toLowerCase()+'|date|'+dateOnly]=true;
-            }
-            actionedDates[aKey]=true;
-          }
-        }
-        // Remove pending that have matching actioned date
-        var filteredMerged=[];
-        for(var fm=0;fm<merged.length;fm++){
-          var fr=merged[fm];
-          if(!fr) continue;
-          if(fr.status==='pending'){
-            var pKey=(fr.username||'').toLowerCase()+'|'+(fr.shiftDate||'')+'|'+(fr.shiftISO||'')+'|'+(fr.shiftIdx!==undefined?fr.shiftIdx:'');
-            var pDateOnly='';
-            if(fr.shiftDate){
-              var pm=fr.shiftDate.match(/(\d{1,2}\/\d{1,2})/);
-              if(pm) pDateOnly=pm[1];
-            }
-            var pDateKey=(fr.username||'').toLowerCase()+'|date|'+pDateOnly;
-            if(actionedDates[pKey] || (pDateOnly && actionedDates[pDateKey])){
-              console.log('Removing stale pending (actioned exists):', fr.id, fr.shiftDate, 'because denied/approved exists');
-              changed=true;
-              continue; // Skip this pending - actioned version exists
-            }
-          }
-          filteredMerged.push(fr);
-        }
-        merged=filteredMerged;
-        
+               // FORCE SEE ANY STATUS: Do NOT delete pending when denied exists - keep all statuses visible
+        // Only deduplicate by ID, keep all statuses
         // Remove duplicates and ensure we keep actioned versions
+        var finalMerged=[];
+        var seen={};
         var finalMerged=[];
         var seen={};
         for(var m=0;m<merged.length;m++){
@@ -1862,6 +1873,30 @@ function showMain(){
     applyRoleVisibility();
   }catch(e){ console.error('showMain', e); }
 }
+function toggleMobileMenu(){
+  try{
+    var gh=document.getElementById('global-header');
+    var btn=document.getElementById('mobile-menu-toggle');
+    if(!gh) return;
+    if(gh.classList.contains('mobile-open')){
+      gh.classList.remove('mobile-open');
+      if(btn) btn.textContent='☰';
+    } else {
+      gh.classList.add('mobile-open');
+      if(btn) btn.textContent='✕';
+    }
+    // Recalculate page padding
+    setTimeout(function(){
+      var headerHeight=gh.offsetHeight||60;
+      document.querySelectorAll('.full-page, #repco-v65').forEach(function(el){
+        if(el.classList.contains('show')){
+          el.style.paddingTop=(headerHeight+10)+'px';
+        }
+      });
+    },50);
+  }catch(e){ console.error(e); }
+}
+
 
 
 
@@ -1887,6 +1922,8 @@ function openPage(id){
       }
     },10);
   }
+  // Close mobile menu when navigating
+  try{ var gh=document.getElementById('global-header'); if(gh) gh.classList.remove('mobile-open'); var mt=document.getElementById('mobile-menu-toggle'); if(mt) mt.textContent='☰'; }catch(e){}
   if(id==='options-page') renderOptions();
   if(id==='today-workers-page') renderTodayWorkers();
   if(id==='requests-page') renderRequests();
@@ -2604,24 +2641,40 @@ function denyReq(i){
     var reqDate=r.shiftDate||'';
     var reqIso=r.shiftISO||'';
     var reqIdx=r.shiftIdx;
+    function extractDateKeyD(str){
+      if(!str) return '';
+      var m=str.match(/(\d{1,2}\/\d{1,2})/);
+      if(m) return m[1];
+      var m2=str.match(/(\d{4}-\d{2}-\d{2})/);
+      if(m2){
+        var parts=m2[1].split('-');
+        if(parts.length===3) return parts[2]+'/'+parts[1];
+      }
+      return '';
+    }
+    var reqDateKey=extractDateKeyD(reqDate)||extractDateKeyD(reqIso);
     // Mark as denied
     r.status='denied';
     r.readByStaff=false;
     r.readByAdmin=true;
     r.deniedBy=safeGet('repco_username')||'admin';
     r.deniedTs=Date.now();
-    // Also remove any other pending requests for same date/user that would cause pending to show
+    // DANIEL FIX: Remove ANY pending for same user+date (21/10) - not just exact match
     for(var j=reqs.length-1;j>=0;j--){
       if(j===i) continue;
       var other=reqs[j];
       if(!other) continue;
       if(other.username && r.username && other.username.toLowerCase()!==r.username.toLowerCase()) continue;
       if(other.status!=='pending') continue;
-      // If same date, remove the duplicate pending
-      if(other.shiftDate===reqDate || other.shiftISO===reqIso || (typeof other.shiftIdx==='number' && other.shiftIdx===reqIdx)){
-        console.log('Removing duplicate pending request for same date:', other.id);
+      var otherDateKey=extractDateKeyD(other.shiftDate||'')||extractDateKeyD(other.shiftISO||'');
+      // Remove if same date key (21/10) OR same ISO OR same shiftIdx
+      if((reqDateKey && otherDateKey && reqDateKey===otherDateKey) ||
+         (other.shiftDate===reqDate) || 
+         (other.shiftISO && reqIso && other.shiftISO===reqIso) || 
+         (typeof other.shiftIdx==='number' && typeof reqIdx==='number' && other.shiftIdx===reqIdx)){
+        console.log('DANIEL FIX: Removing duplicate pending for same date:', other.id, other.shiftDate, 'dateKey', otherDateKey);
         reqs.splice(j,1);
-        if(j<i) i--; // Adjust index if we removed before
+        if(j<i) i--;
       }
     }
     safeSetJSON('retail_roster_requests_v2',reqs);
@@ -2631,7 +2684,7 @@ function denyReq(i){
     try{ renderMySchedule(); }catch(e){}
     try{ renderRosterSafe(); }catch(e){}
     try{ if(typeof updateRequestsBadge==='function') updateRequestsBadge(); }catch(e){}
-    // Immediate cloud sync for cross-device - employee schedule should revert instantly and show REJECTED
+    // Immediate cloud sync - DANIEL FIX - try multiple times
     try{
       if(typeof debouncedCloudSave==='function') debouncedCloudSave();
       if(typeof cloudSave==='function') cloudSave();
@@ -2641,14 +2694,27 @@ function denyReq(i){
         safeSet('repco_cloud_ts', String(state._ts||Date.now()));
         if(typeof db!=='undefined' && db && db.ref){
           db.ref('repco_state').set(state).then(function(){
-            console.log('Denied request synced to cloud - employee will see REJECTED instantly, id:', reqId);
+            console.log('DANIEL FIX: Denied synced to cloud - employee will see REJECTED, id:', reqId);
+          }).catch(function(err){
+            console.error('Firebase set failed, trying fetch', err);
+            fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)}).then(function(){ console.log('Fetch sync success'); });
           });
-        } else if(typeof FIREBASE_DB_URL!=='undefined'){
-          fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});
         }
+        // Always also do fetch - more reliable
+        fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)}).then(function(r){
+          console.log('DANIEL FIX: Fetch PUT success', r.ok);
+          if(!r.ok) throw new Error('PUT failed '+r.status);
+        }).catch(function(e){ console.error('Fetch PUT failed', e); });
+        // Retry after 1s
+        setTimeout(function(){
+          try{
+            var state2=getAllState();
+            fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state2)});
+          }catch(e){}
+        },1000);
       }
     }catch(e){ console.error('Cloud sync error on deny', e); }
-    toast('Denied - Employee will now see REJECTED/DENIED for '+oldShift+' (was '+r.newShift+') - Pending cleared');
+    toast('Denied - Employee will now see REJECTED/DENIED for '+oldShift+' (was '+r.newShift+') - Pending cleared - SYNCED TO DANIEL');
   }catch(e){ toast('Error: '+e.message); console.error(e); }
 }
 
@@ -2995,6 +3061,30 @@ function openCreatePublicHolidayModal(editId){
     var modalHtml='<div style="font-size:11px"><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label style="font-weight:900;font-size:9px">DATE (ISO e.g. 2026-01-26)</label><input id="ph-date-iso" type="date" value="'+(editing?editing.dateISO:'')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111"></div><div><label style="font-weight:900;font-size:9px">PUBLIC HOLIDAY NAME</label><input id="ph-name" placeholder="e.g. Australia Day" value="'+(editing?editing.name:'')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111"></div></div><div style="margin-top:12px"><label style="font-weight:900;font-size:11px">ALLOCATE STAFF FOR THIS PUBLIC HOLIDAY</label><div style="margin-top:8px;display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:6px;align-items:end"><div><label style="font-size:9px">Staff</label><select id="ph-staff-select" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px"><option value="">Select staff</option>'+staffOptions+'</select></div><div><label style="font-size:9px">Times e.g. 08:00-16:00</label><input id="ph-shift" placeholder="08:00-16:30" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px"></div><div><label style="font-size:9px">Area (custom)</label><input id="ph-area" placeholder="e.g. Counter, Workshop, custom area" style="width:100%;padding:6px;border-radius:9999px;border:2px solid #111;font-size:10px"></div><div><button onclick="addPublicHolidayStaffRow()" style="background:#111;color:#fff;border-radius:9999px;padding:6px 10px;font-weight:900;font-size:10px">ADD</button></div></div><div id="ph-staff-list" style="margin-top:10px;max-height:200px;overflow:auto"></div></div><div style="margin-top:8px;font-size:9px;color:#666">Staff NOT listed will automatically be OFF on this date. Original shifts saved and restored if holiday deleted.</div></div>';
     showCustomConfirm(editing?'Edit Public Holiday: '+(editing.name||editing.dateISO):'Create Public Holiday', modalHtml, function(confirmed){
       if(!confirmed) return;
+      // AUTO-ADD: If staff selected but not clicked ADD, add it now - FIX FOR 0 ALLOCATED BUG
+      try{
+        var selEl=document.getElementById('ph-staff-select');
+        var shiftEl=document.getElementById('ph-shift');
+        var areaEl=document.getElementById('ph-area');
+        if(selEl && selEl.value){
+          var opt=selEl.options[selEl.selectedIndex];
+          if(opt && opt.value){
+            var first=opt.getAttribute('data-first')||'';
+            var last=opt.getAttribute('data-last')||'';
+            var username=opt.getAttribute('data-username')||selEl.value||'';
+            var key=selEl.value||'';
+            var shiftVal=(shiftEl?.value||'').trim()||'08:00-16:30';
+            var areaVal=(areaEl?.value||'').trim()||'';
+            var exists=tempPublicHolidayStaff.find(function(sa){
+              return (sa.firstName&&first&&sa.firstName.toLowerCase()===first.toLowerCase()&&sa.lastName&&last&&sa.lastName.toLowerCase()===last.toLowerCase());
+            });
+            if(!exists){
+              tempPublicHolidayStaff.push({firstName:first,lastName:last,username:username||key,shift:shiftVal,area:areaVal,key:key});
+              console.log('AUTO-ADDED staff on CONFIRM:', last+', '+first);
+            }
+          }
+        }
+      }catch(e){ console.error('Auto-add error', e); }
       var dateIso=document.getElementById('ph-date-iso')?.value||'';
       var name=document.getElementById('ph-name')?.value.trim()||'Public Holiday';
       if(!dateIso){ toast('Select date'); setTimeout(function(){ openCreatePublicHolidayModal(editId); },300); return; }
@@ -4358,21 +4448,34 @@ function renderMySchedule(){
     }catch(e){}
     var reqs=safeGetJSON('retail_roster_requests_v2',[]);
     var myUsername=(safeGet('repco_username')||'').toLowerCase();
-        function findRequestForShift(dateObj, iso, idx){
-      // FIXED: Check denied/approved FIRST so actioned requests take priority over pending - prevents pending showing after deny
-      // Robust matching: check multiple date formats and contains
+                function findRequestForShift(dateObj, iso, idx){
+      // FIXED: Force see ANY request status whether approved or denied - no 14-day hide, no prioritization that hides status
+      function extractDateKey(str){
+        if(!str) return '';
+        var m=str.match(/(\d{1,2}\/\d{1,2})/);
+        if(m) return m[1];
+        var m2=str.match(/(\d{4}-\d{2}-\d{2})/);
+        if(m2){
+          var parts=m2[1].split('-');
+          if(parts.length===3) return parts[2]+'/'+parts[1];
+        }
+        return '';
+      }
       function datesMatch(sd, dateObj, iso){
         if(!sd || !dateObj) return false;
         var dateStr=dateObj.date||'';
         var dayStr=dateObj.day||'';
-        // Exact matches
+        var sdDateKey=extractDateKey(sd);
+        var objDateKey=extractDateKey(dateStr)||dateStr;
+        if(sdDateKey && objDateKey && sdDateKey===objDateKey) return true;
+        if(sdDateKey && dateStr && dateStr.indexOf(sdDateKey)!==-1) return true;
+        if(objDateKey && sd.indexOf(objDateKey)!==-1) return true;
         if(sd===dateStr+' '+dayStr) return true;
         if(sd===dayStr+' '+dateStr) return true;
         if(sd===dateStr) return true;
         if(sd===dayStr) return true;
         if(dateStr+' '+dayStr===sd) return true;
         if(dayStr+' '+dateStr===sd) return true;
-        // Contains
         if(dateStr && sd.indexOf(dateStr)!==-1) return true;
         if(dayStr && dateStr && sd.indexOf(dateStr)!==-1 && sd.indexOf(dayStr)!==-1) return true;
         if(iso && sd.indexOf(iso)!==-1) return true;
@@ -4380,52 +4483,38 @@ function renderMySchedule(){
         return false;
       }
       
-      // Check denied within last 14 days - HIGHEST PRIORITY - shows REJECTED/DENIED
+      // FORCE SEE ANY STATUS: Check all statuses, return whatever matches - approved, denied, pending all visible
+      // First check for exact matches for any status - no 14-day filter, always show
       for(var rr=0;rr<reqs.length;rr++){
         var r=reqs[rr];
         if(!r) continue;
         if(r.username && r.username.toLowerCase()!==myUsername) continue;
-        if(r.status!=='denied' && r.status!=='rejected') continue;
-        var isRecent = true;
-        if(r.deniedTs){
-          isRecent = (Date.now() - r.deniedTs) < 14*24*60*60*1000;
-        } else if(r.ts){
-          isRecent = (Date.now() - r.ts) < 14*24*60*60*1000;
+        // Match by ISO or date - return whatever status it has
+        var rDateKey=extractDateKey(r.shiftDate||'')||extractDateKey(r.shiftISO||'');
+        var objDateKey=extractDateKey(dateObj.date||'')||dateObj.date;
+        var dateMatch = (rDateKey && objDateKey && rDateKey===objDateKey) || (r.shiftDate && datesMatch(r.shiftDate, dateObj, iso)) || (r.shiftISO && iso && r.shiftISO===iso);
+        if(!dateMatch) continue;
+        // If shiftIdx also specified, check it
+        if(typeof r.shiftIdx==='number' && typeof idx==='number' && r.shiftIdx!==idx){
+          // Allow date match even if idx differs - date is primary
+          if(!rDateKey || !objDateKey || rDateKey!==objDateKey) continue;
         }
-        if(!isRecent) continue;
-        if(r.shiftISO && iso && r.shiftISO===iso) return {req:r, index:rr, status:'denied'};
-        if(r.shiftDate && datesMatch(r.shiftDate, dateObj, iso)) return {req:r, index:rr, status:'denied'};
-        if(typeof r.shiftIdx==='number' && r.shiftIdx===idx) return {req:r, index:rr, status:'denied'};
-        if(r.fortnightId && dateObj.fortnight && r.fortnightId===dateObj.fortnight.id && r.shiftIdx===idx) return {req:r, index:rr, status:'denied'};
+        // Return whatever status it is - denied, approved, pending all forced visible
+        return {req:r, index:rr, status:r.status};
       }
-      // Then check approved within last 14 days - green approved and actioned
+      // Fallback: check by shiftIdx only
       for(var rr=0;rr<reqs.length;rr++){
         var r=reqs[rr];
         if(!r) continue;
         if(r.username && r.username.toLowerCase()!==myUsername) continue;
-        if(r.status!=='approved') continue;
-        var isRecent = true;
-        if(r.approvedTs){
-          isRecent = (Date.now() - r.approvedTs) < 14*24*60*60*1000;
-        } else if(r.ts){
-          isRecent = (Date.now() - r.ts) < 14*24*60*60*1000;
+        if(typeof r.shiftIdx==='number' && r.shiftIdx===idx){
+          if(r.fortnightId && dateObj.fortnight && r.fortnightId===dateObj.fortnight.id){
+            return {req:r, index:rr, status:r.status};
+          }
+          if(!r.fortnightId || !dateObj.fortnight){
+            return {req:r, index:rr, status:r.status};
+          }
         }
-        if(!isRecent) continue;
-        if(r.shiftISO && iso && r.shiftISO===iso) return {req:r, index:rr, status:'approved'};
-        if(r.shiftDate && datesMatch(r.shiftDate, dateObj, iso)) return {req:r, index:rr, status:'approved'};
-        if(typeof r.shiftIdx==='number' && r.shiftIdx===idx) return {req:r, index:rr, status:'approved'};
-        if(r.fortnightId && dateObj.fortnight && r.fortnightId===dateObj.fortnight.id && r.shiftIdx===idx) return {req:r, index:rr, status:'approved'};
-      }
-      // Finally check pending - lowest priority, so denied/approved shows instead of pending
-      for(var rr=0;rr<reqs.length;rr++){
-        var r=reqs[rr];
-        if(!r) continue;
-        if(r.username && r.username.toLowerCase()!==myUsername) continue;
-        if(r.status!=='pending') continue;
-        if(r.shiftISO && iso && r.shiftISO===iso) return {req:r, index:rr, status:'pending'};
-        if(r.shiftDate && datesMatch(r.shiftDate, dateObj, iso)) return {req:r, index:rr, status:'pending'};
-        if(r.shiftIdx===idx && r.fortnightId && dateObj.fortnight && r.fortnightId===dateObj.fortnight.id) return {req:r, index:rr, status:'pending'};
-        if(typeof r.shiftIdx==='number' && r.shiftIdx===idx) return {req:r, index:rr, status:'pending'};
       }
       return null;
     }
