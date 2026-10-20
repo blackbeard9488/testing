@@ -580,7 +580,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022650000_FIX_ALL_V69";
+const BUILD_ID="20261022660000_FIX_BOTH_V70";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -4554,6 +4554,49 @@ document.addEventListener('DOMContentLoaded',()=>{
 
 function renderMySchedule(){
   try{
+
+    // AGGRESSIVE FIX: If employee has pending and denied for same date, remove pending - ensures DENIED shows not PENDING
+    try{
+      var reqsForClean=safeGetJSON('retail_roster_requests_v2',[]);
+      if(Array.isArray(reqsForClean) && reqsForClean.length>0){
+        var deniedByDate={};
+        for(var d=0;d<reqsForClean.length;d++){
+          var rd=reqsForClean[d];
+          if(!rd) continue;
+          if(rd.status==='denied'||rd.status==='rejected'||rd.status==='approved'){
+            var dk=(rd.username||'').toLowerCase()+'|'+(rd.shiftDate||'').split(' ')[0];
+            if(rd.shiftDate) dk=(rd.username||'').toLowerCase()+'|'+rd.shiftDate.split(' ')[0].split('T')[0];
+            // Use extractDateKey style
+            var m=rd.shiftDate?rd.shiftDate.match(/(\d{1,2}\/\d{1,2})/):null;
+            if(m) dk=(rd.username||'').toLowerCase()+'|'+m[1];
+            deniedByDate[dk]=true;
+          }
+        }
+        var cleaned=[];
+        var hadPendingRemoved=false;
+        for(var c=0;c<reqsForClean.length;c++){
+          var rc=reqsForClean[c];
+          if(!rc) continue;
+          if(rc.status==='pending'){
+            var pk=(rc.username||'').toLowerCase()+'|'+(rc.shiftDate||'').split(' ')[0];
+            var m2=rc.shiftDate?rc.shiftDate.match(/(\d{1,2}\/\d{1,2})/):null;
+            if(m2) pk=(rc.username||'').toLowerCase()+'|'+m2[1];
+            if(deniedByDate[pk]){
+              console.log('AGGRESSIVE FIX: Removing pending', rc.id, 'because denied exists for', pk, '- Employee will see DENIED not PENDING');
+              hadPendingRemoved=true;
+              continue;
+            }
+          }
+          cleaned.push(rc);
+        }
+        if(hadPendingRemoved){
+          safeSetJSON('retail_roster_requests_v2', cleaned);
+          console.log('AGGRESSIVE FIX: Cleaned pending requests, now', cleaned.length, 'total');
+        }
+      }
+    }catch(e){ console.error('Aggressive fix error', e); }
+
+
     // IMMEDIATE LIVE FIX: Force overwrite pending->denied from cloud on every open - fixes Pending Approval stuck after admin denied
     (function(){
       try{
@@ -5178,6 +5221,7 @@ function renderMySchedule(){
       htmlStr+='<div class="card">No upcoming shifts - All caught up!</div>';
     }
     htmlStr+='<div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%;font-size:11px">BACK TO ROSTER</button></div>';
+        if(typeof timePanelHtml!=='undefined' && timePanelHtml) htmlStr=timePanelHtml+htmlStr;
     el.innerHTML=htmlStr;
   }catch(e){
     console.error('renderMySchedule error', e);
