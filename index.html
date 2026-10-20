@@ -647,7 +647,7 @@ body:not(.is-admin) .daily-total-casual {
 <div id="toast-v141"></div>
 
 <script>
-const BUILD_ID="20261022690000_FIX_NODELETE_REVERT_V116";
+const BUILD_ID="20261022690000_INSTANT_MYSCHED_V118";
 let currentHtmlHash=null;
 let currentBuildId=BUILD_ID;
 function computeHashSync(t){let h=0; for(let i=0;i<t.length;i++){h=((h<<5)-h)+t.charCodeAt(i); h|=0;} return h;}
@@ -1252,6 +1252,15 @@ async function doLogin(){
   if(isManagerRole(getActualRole())){
     setTimeout(function(){ restoreEditDraftIfNeeded(); }, 1200);
   }
+  // V117: Employees default to My Schedule page after login
+  try{
+    var role=(found.role||'').toLowerCase();
+    if(role==='staff' || (!isManagerRole(role) && role!=='admin' && role!=='master' && role!=='manager')){
+      setTimeout(function(){
+        try{ openPage('mysched-page'); }catch(e){ console.log('Auto open mysched failed', e); }
+      }, 200);
+    }
+  }catch(e){}
   toast('Welcome '+found.firstName);
 }
 
@@ -2134,13 +2143,29 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
           
           clearEditDraft();
           renderRosterSafe();
+          try{ renderMySchedule(); }catch(e){} // V118: Instantly update My Schedule on roster edit
+          try{ updateMyScheduleCard(); }catch(e){}
           var msg='Saved';
           if(isGreen) msg='Green marked';
           else if(isAB) msg='Marked AB';
           else if(isNA) msg='Marked unavailable';
           else if(newVal===staff.originalShifts[colIdx]) msg='Restored original';
           if(!hadApprovedRevert) toast(msg+' - '+staff.firstName+' '+cur.dates[colIdx].date);
-          try{ debouncedCloudSave(); }catch(e){}
+          // V118: Force instant cloud sync for roster edits - don't wait for debounce
+          try{ 
+            // Immediate push
+            var state=getAllState();
+            state._ts=Date.now();
+            safeSet('repco_cloud_ts', String(state._ts));
+            if(typeof db!=='undefined' && db && db.ref){
+              db.ref('repco_state').set(state);
+            } else {
+              fetch(FIREBASE_DB_URL+'/repco_state.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state),mode:'cors'}).catch(function(){});
+            }
+            fetch(FIREBASE_DB_URL+'/retail_roster_byFortnight_v1.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(fns),mode:'cors'}).catch(function(){});
+            // Also debounced as backup
+            debouncedCloudSave(); 
+          }catch(e){}
           try{ if(typeof updateUndoButton==='function') updateUndoButton(); }catch(e){}
         }catch(e){
           console.error('saveEdit error', e);
@@ -4713,6 +4738,13 @@ document.addEventListener('DOMContentLoaded',()=>{
           var repco=document.getElementById('repco-v65'); if(repco){ repco.classList.add('show'); repco.style.display='block'; }
           try{ setupActivityTracking(); }catch(e){}
           try{ updateActivity(); }catch(e){}
+          // V117: If staff, auto-open My Schedule on session restore (refresh)
+          try{
+            var r=(found.role||'').toLowerCase();
+            if(r==='staff' || (r!=='admin' && r!=='master' && r!=='manager' && !isManagerRole(r))){
+              setTimeout(function(){ try{ openPage('mysched-page'); }catch(e){} }, 500);
+            }
+          }catch(e){}
         }
       } else if(false){ // Disabled: refresh should NOT log out due to 30 min, only index.html update forces logout
         safeSet('repco_username','');
