@@ -99,15 +99,7 @@ document.addEventListener('keydown', function(e){ if(e.key==='Escape'){ const m=
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
-<script>window.addEventListener("unhandledrejection", function(e){ if(e.reason && e.reason.message && e.reason.message.includes("message channel closed")){ e.preventDefault(); console.log("Suppressed extension error: message channel closed"); } });</script>
-<style>
-/* Hide totals from staff - admin only */
-body.staff-view .totals, body.staff-view [id*="daily-total"], body.staff-view .ft-totals, body.staff-view .casual-totals { display:none !important; }
-body:not(.is-admin) .totals { display:none !important; }
-.weekend-start, .weekend-end { border-left:1.6px solid #222 !important; border-right:1.6px solid #222 !important; }
-</style>
-
-</head>
+<script>window.addEventListener("unhandledrejection", function(e){ if(e.reason && e.reason.message && e.reason.message.includes("message channel closed")){ e.preventDefault(); console.log("Suppressed extension error: message channel closed"); } });</script><style>.staff-view .totals{display:none!important}body:not(.is-admin) .totals{display:none!important}.weekend-start,.weekend-end{border-left:1.6px solid #222!important;border-right:1.6px solid #222!important}#undo-btn{background:#FFEB3B!important;color:#111!important;border:3px solid #111!important;display:none}</style></head>
 <body>
 <div class="global-bg"><div class="red-corner-global"></div><div class="black-corner-global"></div></div>
 
@@ -285,7 +277,7 @@ function rawH(sh){if(!sh)return 0;let up=sh.toUpperCase().trim();if(['OFF','NA',
 function netH(sh){let r=rawH(sh);if(r===0)return 0;return r>=5?r-0.5:r}
 function isCasual(st){return st.employmentType==='casual'}
 const FIREBASE_DB_URL="https://testing-de079-default-rtdb.asia-southeast1.firebasedatabase.app";
-const FIREBASE_CONFIG={apiKey:"AIzaSy placeholder",authDomain:"testing-de079.firebaseapp.com",databaseURL:FIREBASE_DB_URL,projectId:"testing-de079",storageBucket:"testing-de079.appspot.com",messagingSenderId:"0",appId:"1:0:web:repco"};
+const FIREBASE_CONFIG={apiKey:"AIzaSy placeholder",authDomain:"rmroster-live.firebaseapp.com",databaseURL:FIREBASE_DB_URL,projectId:"testing-de079",storageBucket:"rmroster-live.appspot.com",messagingSenderId:"0",appId:"1:0:web:repco"};
 let db=null; try{ if(!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG); db=firebase.database(); }catch(e){ db=null; }
 const CLOUD_KEYS=['retail_roster_byFortnight_v1','retail_roster_users_v1','retail_roster_requests_v2','retail_roster_hidden_v1','retail_roster_hidden_shifts_v1','retail_roster_archive_v1','retail_roster_uploaded_excels_v1','repco_username','repco_currentRole','repco_logout_minutes','maintenance_mode','repco_maintenance_first_v1'];
 let cloudSaveTimer=null; let suppressCloudSave=false;
@@ -328,29 +320,47 @@ function applyCloudState(state,isInitial){
 }
 
 
-
-async function cloudLoad() {
-  try {
-    let data=null;
-    if(typeof db!=='undefined' && db) { const snap=await db.ref('repco_state').once('value'); data=snap.val(); }
-    else { const res=await fetch(FIREBASE_DB_URL+'/repco_state.json',{cache:'no-store'}); if(res.ok) data=await res.json(); }
-    if(data && data._ts) {
-      const localTs=parseInt(localStorage.getItem('repco_cloud_ts')||'0');
-      if(data._ts>localTs) {
-        Object.keys(data).forEach(k=>{ if(k!=='_ts' && data[k]!==undefined) try{localStorage.setItem(k,data[k]);}catch(e){} });
-        localStorage.setItem('repco_cloud_ts', String(data._ts));
-        try{
-          localStorage.removeItem('repco_username');
-          localStorage.removeItem('repco_currentRole');
-          localStorage.removeItem('repco_logout_minutes');
-          sessionStorage.clear();
-        }catch(e){}
-        setTimeout(function(){ location.reload(); }, 500);
+async function cloudLoad(){
+  try{
+    if(db){
+      var snap=await db.ref('repco_state').once('value'); var data=snap.val();
+      if(data && data._ts){
+        var localTs=parseInt(safeGet('repco_cloud_ts')||'0');
+        if(data._ts>localTs){ applyCloudState(data,true); safeSet('repco_cloud_ts',String(data._ts)); toast('Synced from cloud'); }
+        db.ref('repco_state').on('value',function(s){
+          var d=s.val(); if(!d||!d._ts) return;
+          var lastTs=parseInt(safeGet('repco_cloud_ts')||'0');
+          if(d._ts>lastTs){
+            applyCloudState(d,false); safeSet('repco_cloud_ts',String(d._ts)); 
+          }
+        }); 
+        setInterval(async function(){
+          try{
+            var ss=await db.ref('repco_state').once('value'); var dd=ss.val();
+            if(dd && dd._ts){
+              var lt=parseInt(safeGet('repco_cloud_ts')||'0');
+              if(dd._ts>lt){ applyCloudState(dd,false); safeSet('repco_cloud_ts',String(dd._ts)); }
+            }
+          }catch(e){}
+        },8000);
+        return;
       }
     }
-  } catch(e) {}
+    var res=await fetch(FIREBASE_DB_URL+'/repco_state.json',{cache:'no-store'});
+    if(res.ok){ var data=await res.json(); if(data&&data._ts){ var localTs=parseInt(safeGet('repco_cloud_ts')||'0'); if(data._ts>localTs){ applyCloudState(data,true); safeSet('repco_cloud_ts',String(data._ts)); } } }
+  }catch(e){ console.log("cloudLoad",e); }
+  setInterval(async function(){
+    try{
+      var r=await fetch(FIREBASE_DB_URL+'/repco_state.json?_t='+Date.now(),{cache:'no-store'});
+      if(!r.ok) return;
+      var d=await r.json();
+      if(d && d._ts){
+        var lt=parseInt(safeGet('repco_cloud_ts')||'0');
+        if(d._ts>lt){ applyCloudState(d,false); safeSet('repco_cloud_ts',String(d._ts)); }
+      }
+    }catch(e){}
+  },5000);
 }
-
 
 async function cloudSave(){
   if(suppressCloudSave) return;
@@ -737,7 +747,7 @@ function renderRosterSafe(){
         var disp=na?'NA':sh; var txt=fmt(disp); if(isAbsentApproved && orig){ txt=fmt(orig)+' AB'; } else if(disp.toUpperCase()==='OFF' || disp==='' ){ txt=''; }
         var off=['OFF',''].includes((disp||'').toUpperCase().trim()); var absent=['AB','ABSENT'].includes((disp||'').toUpperCase().trim()) || isAbsentApproved;
         var cls=''; if(na) cls='cell-na'; else if(absent) cls='cell-absent'; else if(off) cls='cell-off'; else if(isGreen) cls='cell-green'; else cls='cell-work';
-        var isWeekendCol=isWeekend(cur.dates[idx].day); var weekendClass=''; if(isWeekendCol){ var prevWeekend=idx>0?isWeekend(cur.dates[idx-1].day):false; var nextWeekend=idx<cur.dates.length-1?isWeekend(cur.dates[idx+1].day):false; /*weekend same as rest*/ /*weekend same as rest*/ cls+=' col-weekend'+weekendClass; }
+        var isWeekendCol=isWeekend(cur.dates[idx].day); var weekendClass=''; if(isWeekendCol){ var prevWeekend=idx>0?isWeekend(cur.dates[idx-1].day):false; var nextWeekend=idx<cur.dates.length-1?isWeekend(cur.dates[idx+1].day):false; /*weekend same*/ /*weekend same*/ cls+=' col-weekend'+weekendClass; }
         var isFull=!isCasual(st); var net; if(isAbsentApproved){ net = isFull ? netH(orig||sh) : 0; } else if(isFull){ if(na){ net=netH(orig||sh); } else { net=netH(sh); } } else { if(na||off||absent){ net=0; } else { net=netH(sh); } } hrs+=net;dayTotals[idx]+=net;
         var clickAttr=''; if(isMgr){ clickAttr=' onclick="editCell(this,'+globalStaffIdx+','+idx+',\''+title+'\')" '; }
         rows+='<td class="'+cls+'"'+clickAttr+'>'+txt+'</td>';
@@ -753,55 +763,9 @@ function renderRosterSafe(){
   var labelEl=document.getElementById('fortnight-label'); if(labelEl) labelEl.textContent=cur.label;
   // Update secondary headers that show 07/10 to 20/10
   document.querySelectorAll('.sec-head span:last-child').forEach(function(el){ if(el.textContent.indexOf('/')!==-1) el.textContent=cur.dates[0].date+' to '+cur.dates[cur.dates.length-1].date; });
-
-  try{ updateUndoButton(); }catch(e){}
 }
 
 function editStaffType(globalIdx){ if(!isManagerRole()) return; showCustomSelect('Set employment type for '+getCurrentFortnight().staff[globalIdx].firstName+' '+getCurrentFortnight().staff[globalIdx].lastName, ['Full time','Casual'], (choice)=>{ if(!choice) return; let norm=choice.toLowerCase().includes('casual')?'casual':'fulltime'; let fns=safeGetJSON('retail_roster_byFortnight_v1',[]); let fn=fns.find(f=>f.id===safeGet('retail_roster_currentFortnightId')); if(fn){ fn.staff[globalIdx].employmentType=norm; safeSetJSON('retail_roster_byFortnight_v1',fns); } toast(fn.staff[globalIdx].firstName+' set to '+norm+' - synced'); renderRosterSafe(); applyRoleVisibility(); }); }
-
-
-let undoStack=[];
-const MAX_UNDO=50;
-function pushUndo(){
-  try{
-    var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
-    var snapshot=JSON.stringify(fns);
-    undoStack.push({fns:snapshot, ts:Date.now(), by:safeGet('repco_username')||'admin'});
-    if(undoStack.length>MAX_UNDO) undoStack.shift();
-    localStorage.setItem('repco_undo_stack', JSON.stringify(undoStack.slice(-20)));
-    updateUndoButton();
-  }catch(e){}
-}
-function undoLastEdit(){
-  try{
-    if(undoStack.length===0){
-      var saved=localStorage.getItem('repco_undo_stack');
-      if(saved){ try{ undoStack=JSON.parse(saved); }catch(e){ undoStack=[]; } }
-    }
-    if(undoStack.length===0){ toast('Nothing to undo'); return; }
-    var last=undoStack.pop();
-    if(!last || !last.fns){ toast('Nothing to undo'); return; }
-    showCustomConfirm('Undo Last Edit?', '<div style="font-size:11px">Undo last edit at '+new Date(last.ts).toLocaleString()+' by '+(last.by||'admin')+'?</div>', function(confirmed){
-      if(!confirmed){ undoStack.push(last); return; }
-      try{
-        var fns=JSON.parse(last.fns);
-        safeSetJSON('retail_roster_byFortnight_v1',fns);
-        localStorage.setItem('repco_undo_stack', JSON.stringify(undoStack));
-        renderRosterSafe();
-        updateUndoButton();
-        toast('Undone');
-        try{ debouncedCloudSave(); }catch(e){}
-      }catch(e){ toast('Undo failed: '+e.message); }
-    });
-  }catch(e){ toast('Undo error: '+e.message); }
-}
-function updateUndoButton(){
-  var btn=document.getElementById('undo-btn');
-  if(btn){ btn.style.display=undoStack.length>0?'inline-block':'none'; btn.textContent='UNDO ('+undoStack.length+')'; }
-}
-try{ var savedStack=localStorage.getItem('repco_undo_stack'); if(savedStack){ undoStack=JSON.parse(savedStack); } }catch(e){ undoStack=[]; }
-
-
 
 function editCell(el,rowIdx,colIdx,sectionTitle){
   try{
@@ -827,28 +791,29 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
           }
         }
       }
-      if(!hasApprovedAbsent && staff.absentApproved && staff.absentApproved[colIdx]){ hasApprovedAbsent=true; }
+      if(!hasApprovedAbsent && staff.absentApproved && staff.absentApproved[colIdx]){
+        hasApprovedAbsent=true;
+      }
     }catch(e){}
     if(hasApprovedAbsent){
       showCustomConfirm('Approved Absent Request', '<div style="font-size:11px">This shift was approved as ABSENT (AB) for '+staff.firstName+' '+staff.lastName+' on '+(approvedReq?approvedReq.shiftDate:cur.dates[colIdx].date)+' '+cur.dates[colIdx].day+'<br><br>Reason: '+(approvedReq && approvedReq.reason ? approvedReq.reason : 'AB approved')+'<br><br>Do you want to override and remove AB status?</div>', function(confirmed){
         if(!confirmed) return;
         try{
           if(typeof updateActivity==='function') updateActivity();
-          pushUndo();
+          staff.absentApproved[colIdx]=false;
+          var orig=staff.originalShifts && staff.originalShifts[colIdx] ? staff.originalShifts[colIdx] : 'OFF';
+          staff.shifts[colIdx]=orig;
           var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
           var fnIdx=fns.findIndex(function(f){return f.id===cur.id;});
           if(fnIdx!==-1){
             var targetStaff=fns[fnIdx].staff[rowIdx];
-            if(targetStaff){
-              targetStaff.absentApproved=targetStaff.absentApproved||{};
-              targetStaff.absentApproved[colIdx]=false;
-              var orig=targetStaff.originalShifts && targetStaff.originalShifts[colIdx] ? targetStaff.originalShifts[colIdx] : 'OFF';
-              targetStaff.shifts[colIdx]=orig;
-            }
+            if(targetStaff){ targetStaff.absentApproved=targetStaff.absentApproved||{}; targetStaff.absentApproved[colIdx]=false; var orig2=targetStaff.originalShifts && targetStaff.originalShifts[colIdx] ? targetStaff.originalShifts[colIdx] : 'OFF'; targetStaff.shifts[colIdx]=orig2; }
           }
           safeSetJSON('retail_roster_byFortnight_v1',fns);
           renderRosterSafe();
           toast('AB removed - opening edit');
+          setTimeout(function(){ try{ var newCur=getSelectedFortnight(); if(!newCur) newCur=getCurrentFortnight(); if(!newCur) return; var newRowIdx=newCur.staff.findIndex(function(s){return s.firstName===staff.firstName && s.lastName===staff.lastName;}); if(newRowIdx===-1) newRowIdx=rowIdx; var rows=document.querySelectorAll('tr'); for(var i=0;i<rows.length;i++){ var row=rows[i]; var staffCell=row.querySelector('.staff-cell'); if(staffCell && staffCell.textContent.includes(staff.lastName)){ var tds=row.querySelectorAll('td'); if(tds[colIdx+1]){ editCell(tds[colIdx+1], newRowIdx, colIdx, sectionTitle); break; } } } }catch(e){} }, 500);
+          clearEditDraft();
           if(approvedReq){
             var all=safeGetJSON('retail_roster_requests_v2',[]);
             for(var i=0;i<all.length;i++){
@@ -861,92 +826,69 @@ function editCell(el,rowIdx,colIdx,sectionTitle){
             }
             safeSetJSON('retail_roster_requests_v2',all);
           }
-          try{ debouncedCloudSave(); }catch(e){}
-          setTimeout(function(){
-            try{
-              var newCur=getSelectedFortnight(); if(!newCur) newCur=getCurrentFortnight();
-              if(!newCur) return;
-              var newRowIdx=newCur.staff.findIndex(function(s){return s.firstName===staff.firstName && s.lastName===staff.lastName;});
-              if(newRowIdx===-1) newRowIdx=rowIdx;
-              var rows=document.querySelectorAll('tr');
-              for(var i=0;i<rows.length;i++){
-                var row=rows[i];
-                var staffCell=row.querySelector('.staff-cell');
-                if(staffCell && staffCell.textContent.includes(staff.lastName)){
-                  var tds=row.querySelectorAll('td');
-                  if(tds[colIdx+1]){ editCell(tds[colIdx+1], newRowIdx, colIdx, sectionTitle); break; }
-                }
-              }
-            }catch(e){}
-          }, 500);
-        }catch(e){ toast('Error: '+e.message); }
+        }catch(e){ console.error(e); toast('Error: '+e.message); }
       });
       return;
     }
-    if(el.querySelector('input')) return;
     var current=staff.shifts[colIdx]||'OFF';
-    var input=document.createElement('input');
-    input.type='text';
-    input.value=current.toUpperCase()==='OFF'?'':current;
-    input.placeholder='G=green, AB=absent, OFF, HH:MM-HH:MM';
-    input.style.cssText='width:100%;height:100%;min-height:28px;border:2px solid #111;border-radius:6px;padding:4px 2px;font-size:11px;font-weight:900;text-align:center;background:#FFFBCC;outline:none;box-sizing:border-box';
-    el.innerHTML='';
-    el.appendChild(input);
-    input.focus();
-    input.select();
-    function saveEdit(){
-      try{
-        var newVal=input.value.trim();
-        if(!newVal) newVal='OFF';
-        var up=newVal.toUpperCase();
-        pushUndo();
-        var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
-        var fnIdx=fns.findIndex(function(f){return f.id===cur.id;});
-        if(fnIdx===-1){ toast('Roster not found'); renderRosterSafe(); return; }
-        var targetFn=fns[fnIdx];
-        var targetStaff=targetFn.staff[rowIdx];
-        if(!targetStaff){ toast('Staff not found'); renderRosterSafe(); return; }
-        if(!targetStaff.originalShifts) targetStaff.originalShifts={};
-        if(!targetStaff.cellGreen) targetStaff.cellGreen={};
-        if(!targetStaff.absentApproved) targetStaff.absentApproved={};
-        if(!targetStaff.unavailable) targetStaff.unavailable=Array(targetFn.dates.length).fill(false);
-        if(targetStaff.originalShifts[colIdx]===undefined || targetStaff.originalShifts[colIdx]===null){ targetStaff.originalShifts[colIdx]=targetStaff.shifts[colIdx]; }
-        if(up==='G'){
-          targetStaff.cellGreen[colIdx]=!targetStaff.cellGreen[colIdx];
-          toast((targetStaff.cellGreen[colIdx]?'Green ON':'Green OFF')+' for '+targetStaff.firstName);
-        } else if(up==='AB' || up==='ABSENT'){
-          targetStaff.absentApproved[colIdx]=true;
-          targetStaff.cellGreen[colIdx]=false;
-          targetStaff.unavailable[colIdx]=false;
-          toast('Marked AB for '+targetStaff.firstName);
-        } else if(up==='NA'){
-          targetStaff.unavailable[colIdx]=true;
-          targetStaff.absentApproved[colIdx]=false;
-          targetStaff.cellGreen[colIdx]=false;
-          targetStaff.shifts[colIdx]='OFF';
-        } else if(up==='OFF' || up===''){
-          targetStaff.shifts[colIdx]='OFF';
-          targetStaff.absentApproved[colIdx]=false;
-          targetStaff.unavailable[colIdx]=false;
-          targetStaff.cellGreen[colIdx]=false;
-        } else {
-          targetStaff.shifts[colIdx]=newVal;
-          targetStaff.absentApproved[colIdx]=false;
-          targetStaff.unavailable[colIdx]=false;
-        }
-        safeSetJSON('retail_roster_byFortnight_v1',fns);
-        renderRosterSafe();
-        updateUndoButton();
-        toast('Updated: '+newVal);
-        try{ debouncedCloudSave(); }catch(e){}
-      }catch(e){ toast('Error: '+e.message); renderRosterSafe(); }
+    var draft=getEditDraft();
+    var initialValue=current;
+    if(draft && draft.rowIdx===rowIdx && draft.colIdx===colIdx && (Date.now()-draft.ts)<24*60*60*1000){
+      initialValue=draft.value;
     }
-    function cancelEdit(){ try{ renderRosterSafe(); }catch(e){ renderRosterSafe(); } }
-    input.addEventListener('blur', function(){ saveEdit(); });
-    input.addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); saveEdit(); } else if(e.key==='Escape'){ e.preventDefault(); cancelEdit(); } });
-  }catch(e){ toast('Edit error: '+e.message); }
+    showCustomPrompt('Edit Shift', '<div style="font-size:11px">Edit shift for '+staff.firstName+' '+staff.lastName+' on '+cur.dates[colIdx].day+' '+cur.dates[colIdx].date+'<br>Current: '+current+(initialValue!==current?' <br><b style="color:#E30613">Unsaved draft: '+initialValue+'</b>':'')+'</div><input id="edit-shift-input" value="'+initialValue.replace(/"/g,'&quot;')+'" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;margin-top:8px"><div style="font-size:9px;color:#666;margin-top:6px">Auto-saves while typing. If timed out or refreshed, draft is restored.</div>', function(val){
+      if(val===null){ return; }
+      var newVal=val.trim();
+      if(!newVal) newVal='OFF';
+      if(!staff.originalShifts) staff.originalShifts=[];
+      if(!staff.originalShifts[colIdx]) staff.originalShifts[colIdx]=staff.shifts[colIdx];
+      if(!staff.originalShifts) staff.originalShifts=[]; if(!staff.originalShifts[colIdx]) staff.originalShifts[colIdx]=staff.shifts[colIdx];
+      // Fix totals bug - update fns array properly
+      var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+      var fnIdx=fns.findIndex(function(f){return f.id===cur.id;});
+      if(fnIdx!==-1){
+        var targetStaff=fns[fnIdx].staff[rowIdx];
+        if(targetStaff){
+          if(!targetStaff.originalShifts) targetStaff.originalShifts={};
+          if(!targetStaff.originalShifts[colIdx]) targetStaff.originalShifts[colIdx]=targetStaff.shifts[colIdx];
+          targetStaff.shifts[colIdx]=newVal;
+          if(newVal.toUpperCase()==='AB' || newVal.toUpperCase()==='ABSENT'){
+            if(!targetStaff.absentApproved) targetStaff.absentApproved=[];
+            targetStaff.absentApproved[colIdx]=true;
+          } else {
+            if(targetStaff.absentApproved) targetStaff.absentApproved[colIdx]=false;
+          }
+        }
+      }
+      safeSetJSON('retail_roster_byFortnight_v1',fns);
+      clearEditDraft();
+      if(typeof updateActivity==='function') updateActivity();
+      renderRosterSafe();
+      toast('Shift updated: '+newVal+' (auto-saved)');
+    });
+    setTimeout(function(){
+      var inp=document.getElementById('edit-shift-input');
+      if(inp){
+        inp.addEventListener('input', function(){
+          if(typeof updateActivity==='function') updateActivity();
+          var v=inp.value;
+          saveEditDraft(rowIdx, colIdx, v, staff.firstName+' '+staff.lastName, cur.dates[colIdx].day+' '+cur.dates[colIdx].date);
+          if(draftSaveTimeout) clearTimeout(draftSaveTimeout);
+          draftSaveTimeout=setTimeout(function(){
+            var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+            if(fns) safeSetJSON('retail_roster_backup_autosave_v1', {fns:fns, ts:Date.now(), by:safeGet('repco_username')||'', reason:'typing_autosave'});
+          }, 2000);
+        });
+        saveEditDraft(rowIdx, colIdx, inp.value, staff.firstName+' '+staff.lastName, cur.dates[colIdx].day+' '+cur.dates[colIdx].date);
+        inp.focus();
+        inp.select();
+      }
+    }, 100);
+  }catch(e){
+    console.error('editCell error', e);
+    toast('Edit error: '+e.message);
+  }
 }
-
 
 function prevFortnight(){const fns=safeGetJSON('retail_roster_byFortnight_v1',[]);let idx=fns.findIndex(f=>f.id===safeGet('retail_roster_currentFortnightId'));if(idx<=0)idx=fns.length-1;else idx--;safeSet('retail_roster_currentFortnightId',fns[idx].id);populateFortnightSelect();renderRosterSafe(); applyRoleVisibility();}
 function nextFortnight(){const fns=safeGetJSON('retail_roster_byFortnight_v1',[]);let idx=fns.findIndex(f=>f.id===safeGet('retail_roster_currentFortnightId'));if(idx<0||idx>=fns.length-1)idx=0;else idx++;safeSet('retail_roster_currentFortnightId',fns[idx].id);populateFortnightSelect();renderRosterSafe(); applyRoleVisibility();}
@@ -1963,7 +1905,6 @@ document.addEventListener('DOMContentLoaded',()=>{
 
 
 
-
 function renderMySchedule(){
   try{
     if(typeof updateActivity==='function') updateActivity();
@@ -1978,7 +1919,6 @@ function renderMySchedule(){
     }
     var now=new Date();
     var brisbaneNow=new Date();
-    var todayISO='';
     try{
       var brisbaneFmt=new Intl.DateTimeFormat('en-AU',{timeZone:'Australia/Brisbane',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
       var parts=brisbaneFmt.formatToParts(now);
@@ -1988,15 +1928,10 @@ function renderMySchedule(){
       var hh=parseInt(parts.find(function(p){return p.type==='hour';}).value);
       var mm=parseInt(parts.find(function(p){return p.type==='minute';}).value);
       brisbaneNow=new Date(y,mo,d,hh,mm);
-      todayISO=y+'-'+String(mo+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
-    }catch(e){
-      todayISO=getISO();
-      brisbaneNow=new Date();
-    }
-    // Fix: Ensure today is correctly identified as Tuesday 20/10 etc.
-    // Use Brisbane date for comparison, not just iso
-    var htmlStr='<div class="card" style="background:#111;color:#fff"><b>MY SCHEDULE - '+(myStaff.lastName?myStaff.lastName.toUpperCase():'')+' '+(myStaff.firstName||'')+'</b><br>'+cur.label+'<br><small style="background:#FFEB3B;color:#111;border-radius:9999px;padding:2px 8px;font-size:10px">Today: '+todayISO+' (Brisbane)</small></div>';
+    }catch(e){}
+    var htmlStr='<div class="card" style="background:#111;color:#fff"><b>MY SCHEDULE - '+(myStaff.lastName?myStaff.lastName.toUpperCase():'')+' '+(myStaff.firstName||'')+'</b><br>'+cur.label+'</div>';
     var upcoming=[]; var worked=[]; var offDays=[]; var currentShift=null; var nextShift=null;
+    var todayISO=getISO();
     for(var i=0;i<cur.dates.length;i++){
       var d=cur.dates[i];
       var sh=(myStaff.shifts && myStaff.shifts[i]!=null) ? myStaff.shifts[i] : 'OFF';
@@ -2044,7 +1979,7 @@ function renderMySchedule(){
         var elapsed=brisbaneNow - currentShift.start;
         progress=Math.min(100, Math.max(0, (elapsed/total)*100));
       }catch(e){}
-      htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+currentShift.idx+', \''+currentShift.date.date+' '+currentShift.date.day+'\', \''+currentShift.shift.replace(/'/g, "\\'")+'\')"><div style="font-weight:900;font-size:12px">CURRENT SHIFT - TAP TO REQUEST EDIT</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+currentShift.date.day+' '+currentShift.date.date+' - '+fmt(currentShift.shift)+'</div><div style="font-weight:900;font-size:14px;color:#E30613">'+countdown+'</div><div style="margin-top:8px;background:#fff;border:2px solid #111;border-radius:9999px;height:10px;overflow:hidden"><div style="background:#111;height:100%;width:'+progress+'%"></div></div><div style="font-size:10px;margin-top:4px">'+Math.round(progress)+'% complete - TAP TO EDIT REQUEST</div></div>';
+      htmlStr+='<div class="card" style="background:#B6F7C5;border:3px solid #111"><div style="font-weight:900;font-size:12px">CURRENT SHIFT</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+currentShift.date.day+' '+currentShift.date.date+' - '+fmt(currentShift.shift)+'</div><div style="font-weight:900;font-size:14px;color:#E30613">'+countdown+'</div><div style="margin-top:8px;background:#fff;border:2px solid #111;border-radius:9999px;height:10px;overflow:hidden"><div style="background:#111;height:100%;width:'+progress+'%"></div></div><div style="font-size:10px;margin-top:4px">'+Math.round(progress)+'% complete</div></div>';
     }
     if(nextShift && !currentShift){
       var until=nextShift.start - brisbaneNow;
@@ -2055,20 +1990,20 @@ function renderMySchedule(){
       if(untilD>0) untilTxt='Starts in '+untilD+'d '+(untilH%24)+'h';
       else if(untilH>0) untilTxt='Starts in '+untilH+'h '+untilM+'m';
       else untilTxt='Starts in '+untilM+' minutes';
-      htmlStr+='<div class="card" style="background:#FFF6CC;border:3px solid #111;cursor:pointer" onclick="requestShiftCorrectionFromSchedule('+nextShift.idx+', \''+nextShift.date.date+' '+nextShift.date.day+'\', \''+nextShift.shift.replace(/'/g, "\\'")+'\')"><div style="font-weight:900;font-size:12px">NEXT UP - TAP TO REQUEST EDIT</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+nextShift.date.day+' '+nextShift.date.date+' - '+fmt(nextShift.shift)+'</div><div style="font-weight:900;font-size:12px">'+untilTxt+'</div><div style="font-size:10px;margin-top:4px">TAP TO REQUEST CORRECTION</div></div>';
+      htmlStr+='<div class="card" style="background:#FFF6CC;border:3px solid #111"><div style="font-weight:900;font-size:12px">NEXT UP</div><div style="font-weight:900;font-size:16px;margin:6px 0">'+nextShift.date.day+' '+nextShift.date.date+' - '+fmt(nextShift.shift)+'</div><div style="font-weight:900;font-size:12px">'+untilTxt+'</div></div>';
     }
     if(upcoming.length>0){
       htmlStr+='<div class="card" style="background:#111;color:#fff;font-weight:900">UPCOMING SHIFTS ('+upcoming.length+') - TAP A SHIFT TO REQUEST EDIT</div>';
       for(var i=0;i<upcoming.length;i++){
         var u=upcoming[i];
-        htmlStr+='<div class="card" style="cursor:pointer;border:2px solid #111" onclick="requestShiftCorrectionFromSchedule('+u.idx+', \''+u.date.date+' '+u.date.day+'\', \''+u.shift.replace(/'/g, "\\'")+'\')"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+'<br><small style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px">TAP TO EDIT REQUEST</small></div>';
+        htmlStr+='<div class="card" style="cursor:pointer;border:2px solid #111" onclick="openPage(\'requests-page\'); setTimeout(function(){ var sel=document.getElementById(\'corr-shift-select\'); if(sel){ sel.value=\''+u.idx+'\'; toast(\'Selected for correction\'); } }, 500);"><b>'+u.date.day+' '+u.date.date+'</b> - '+fmt(u.shift)+'<br><small style="background:#111;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px">TAP TO EDIT REQUEST</small></div>';
       }
     }
     if(worked.length>0){
       htmlStr+='<div class="card" style="background:#E5E5E5;font-weight:900">WORKED SHIFTS ('+worked.length+')</div>';
       for(var i=0;i<worked.length;i++){
         var w=worked[i];
-        htmlStr+='<div class="card" style="opacity:0.7;cursor:pointer;border:2px solid #999" onclick="requestShiftCorrectionFromSchedule('+w.idx+', \''+w.date.date+' '+w.date.day+'\', \''+w.shift.replace(/'/g, "\\'")+'\')"><b>'+w.date.day+' '+w.date.date+'</b> - '+fmt(w.shift)+' done<br><small style="background:#E5E5E5;border-radius:9999px;padding:2px 6px;font-size:9px">TAP TO REQUEST CORRECTION</small></div>';
+        htmlStr+='<div class="card" style="opacity:0.7"><b>'+w.date.day+' '+w.date.date+'</b> - '+fmt(w.shift)+' done</div>';
       }
     }
     if(offDays.length>0){
@@ -2091,40 +2026,6 @@ function renderMySchedule(){
     if(el) el.innerHTML='<div class="card">Error: '+e.message+'</div><div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%">BACK</button></div>';
   }
 }
-
-function requestShiftCorrectionFromSchedule(idx, dateLabel, currentShift){
-  // Open request page with this shift pre-selected
-  try{
-    // Save to temp for requests page
-    localStorage.setItem('repco_preselect_shift_idx', String(idx));
-    localStorage.setItem('repco_preselect_shift_label', dateLabel);
-    localStorage.setItem('repco_preselect_shift_current', currentShift);
-    // Open requests page
-    openPage('requests-page');
-    setTimeout(function(){
-      // Pre-select the shift in the correction dropdown
-      var sel=document.getElementById('corr-shift-select');
-      if(sel){
-        sel.value=String(idx);
-        // Scroll to correction section
-        sel.scrollIntoView({behavior:'smooth', block:'center'});
-        // Highlight
-        sel.style.background='#FFFBCC';
-        setTimeout(function(){ sel.style.background=''; }, 2000);
-        toast('Selected '+dateLabel+' for correction - enter new times');
-      }
-      // Also check if using new enhanced requests page
-      var corrSelect=document.getElementById('corr-shift-select');
-      if(corrSelect){
-        corrSelect.value=String(idx);
-      }
-    }, 500);
-  }catch(e){
-    console.error('requestShiftCorrectionFromSchedule error', e);
-    toast('Error: '+e.message);
-  }
-}
-
 
 
 
@@ -2228,40 +2129,359 @@ function renderBuddies(which){
 
 
 
+
 function renderRequests(){
   var el=document.getElementById('requests-list');
   if(!el) return;
   var isMgr=isManagerRole(getActualRole());
   var reqs=safeGetJSON('retail_roster_requests_v2',[]);
   if(!Array.isArray(reqs)) reqs=[];
+  var myUsername=(safeGet('repco_username')||'').toLowerCase();
+  
+  // Update badge counts
+  try{ updateRequestsBadge(); }catch(e){}
+  
   if(isMgr){
-    if(reqs.length===0){ el.innerHTML='<div class="card" style="padding:10px">No pending requests</div><div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%;font-size:11px">← BACK</button></div>'; return; }
-    el.innerHTML=reqs.map(function(r,i){ 
-      if(!r || typeof r!=='object') return '<div class="card">'+String(r)+'</div>';
-      return '<div class="card" style="padding:10px"><div style="font-weight:900;font-size:11px">'+(r.type||'')+' - '+(r.username||'')+' - '+(r.shiftDate||(r.dates&&r.dates[0])||'')+'</div><div style="font-size:11px">'+(r.reason||'')+' - '+(r.newShift||'')+'</div><div style="margin-top:6px"><button onclick="approveReq('+i+')" style="background:#111;color:#fff;border-radius:9999px;padding:6px 10px;font-weight:900;margin-right:6px;font-size:10px">APPROVE</button><button onclick="denyReq('+i+')" style="background:#fff;border:2px solid #111;border-radius:9999px;padding:6px 10px;font-weight:900;font-size:10px">DENY</button></div></div>'; 
-    }).join('') + '<div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%;font-size:11px">← BACK</button></div>';
+    if(reqs.length===0){ 
+      el.innerHTML='<div class="card" style="padding:10px">No pending requests</div><div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%;font-size:11px">BACK</button></div>'; 
+      return; 
+    }
+    // Sort: unread first, then pending, then others, newest first
+    var sorted = reqs.slice().sort(function(a,b){
+      var aUnread = !a.readByAdmin && a.status==='pending';
+      var bUnread = !b.readByAdmin && b.status==='pending';
+      if(aUnread && !bUnread) return -1;
+      if(!aUnread && bUnread) return 1;
+      return (b.ts||0) - (a.ts||0);
+    });
+    
+    var html = '<div class="card" style="background:#111;color:#fff;font-weight:900;display:flex;justify-content:space-between;align-items:center"><span>ALL REQUESTS ('+reqs.length+')</span><span><button onclick="markAllRequestsRead()" style="background:#FFEB3B;color:#111;border:2px solid #fff;border-radius:9999px;padding:4px 8px;font-weight:900;font-size:9px">MARK ALL READ</button></span></div>';
+    
+    for(var i=0;i<sorted.length;i++){
+      var r=sorted[i];
+      var originalIdx = reqs.indexOf(r);
+      if(!r || typeof r!=='object') continue;
+      var isUnread = !r.readByAdmin && r.status==='pending';
+      var isNew = isUnread;
+      var bg = isNew ? '#FFFBCC' : '#fff';
+      var border = isNew ? '3px solid #E30613' : '2px solid #111';
+      var badge = isNew ? '<span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:8px;font-weight:900;margin-left:6px">NEW</span>' : (r.readByAdmin ? '<span style="background:#ccc;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px">READ</span>' : '');
+      html += '<div class="card" style="padding:10px;background:'+bg+';border:'+border+'">';
+      html += '<div style="font-weight:900;font-size:11px;display:flex;justify-content:space-between"><span>'+(r.type||'')+' - '+(r.username||'')+' - '+(r.shiftDate||(r.dates&&r.dates[0])||'')+'</span>'+badge+'</div>';
+      html += '<div style="font-size:11px;margin:4px 0"><b>Current:</b> '+(r.oldShift||r.newShift||'')+' <b>→ New:</b> '+(r.newShift||'')+'</div>';
+      html += '<div style="font-size:10px;color:#666">Reason: '+(r.reason||'')+'<br>Status: <b>'+(r.status||'pending')+'</b> - '+new Date(r.ts||Date.now()).toLocaleString()+'</div>';
+      html += '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">';
+      if(r.status==='pending'){
+        html += '<button onclick="approveReq('+originalIdx+')" style="background:#111;color:#fff;border-radius:9999px;padding:6px 10px;font-weight:900;font-size:10px">APPROVE</button>';
+        html += '<button onclick="denyReq('+originalIdx+')" style="background:#fff;border:2px solid #111;border-radius:9999px;padding:6px 10px;font-weight:900;font-size:10px">DENY</button>';
+      }
+      if(isNew){
+        html += '<button onclick="markRequestRead('+originalIdx+')" style="background:#FFEB3B;color:#111;border:2px solid #111;border-radius:9999px;padding:6px 10px;font-weight:900;font-size:10px">MARK READ</button>';
+      } else if(r.readByAdmin){
+        html += '<button onclick="markRequestUnread('+originalIdx+')" style="background:#E5E5E5;border:2px solid #111;border-radius:9999px;padding:6px 10px;font-weight:900;font-size:10px">MARK UNREAD</button>';
+      }
+      html += '<button onclick="deleteRequest('+originalIdx+')" style="background:#E30613;color:#fff;border:2px solid #111;border-radius:9999px;padding:6px 10px;font-weight:900;font-size:10px">DELETE</button>';
+      html += '</div></div>';
+    }
+    html += '<div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%;font-size:11px">BACK</button></div>';
+    el.innerHTML=html;
   } else {
+    // Staff view
     var cur=getSelectedFortnight(); if(!cur) cur=getCurrentFortnight();
     var myStaff=cur?findMyStaff(cur):null;
     var html='<div class="card" style="padding:10px"><div style="font-weight:900;font-size:12px;margin-bottom:8px">SUBMIT REQUEST</div>';
     html+='<label style="font-weight:900;font-size:10px">TYPE</label><select id="req-type" onchange="onReqTypeChange()" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;margin:4px 0 8px 0;font-size:11px"><option value="unavailability">Unavailability</option><option value="shift-correction">Shift Correction</option></select>';
     html+='<div id="req-dynamic-area"></div></div>';
-    var myUsername=(safeGet('repco_username')||'').toLowerCase();
+    
     var myReqs=reqs.filter(function(r){ return r && r.username && r.username.toLowerCase()===myUsername; });
+    // Sort: unread responses first, then pending, then others
+    myReqs.sort(function(a,b){
+      var aUnread = !a.readByStaff && (a.status==='approved' || a.status==='denied');
+      var bUnread = !b.readByStaff && (b.status==='approved' || b.status==='denied');
+      if(aUnread && !bUnread) return -1;
+      if(!aUnread && bUnread) return 1;
+      return (b.ts||0) - (a.ts||0);
+    });
+    
     if(myReqs.length>0){
-      html+='<div class="card" style="padding:10px"><div style="font-weight:900;font-size:11px">MY REQUESTS ('+myReqs.length+')</div>';
-      myReqs.forEach(function(r){
-        if(!r || typeof r!=='object') return;
-        var date=r.shiftDate||(r.dates&&r.dates[0])||''; var status=r.status||'pending';
-        html+='<div style="border-top:1px solid #ddd;padding:6px 0;font-size:10px"><b>'+(r.type||'')+'</b> - '+date+' - '+status+'<br>'+(r.reason||'')+'</div>';
-      });
-      html+='</div>';
+      var unreadCount = myReqs.filter(function(r){ return !r.readByStaff && (r.status==='approved' || r.status==='denied'); }).length;
+      var pendingCount = myReqs.filter(function(r){ return r.status==='pending'; }).length;
+      html+='<div class="card" style="padding:10px;background:#111;color:#fff;font-weight:900;display:flex;justify-content:space-between;align-items:center"><span>MY REQUESTS ('+myReqs.length+')'+(unreadCount>0 ? ' - <span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:9px">'+unreadCount+' NEW</span>' : '')+'</span><span><button onclick="markAllMyRequestsRead()" style="background:#FFEB3B;color:#111;border:2px solid #fff;border-radius:9999px;padding:4px 8px;font-weight:900;font-size:9px">MARK ALL READ</button></span></div>';
+      for(var j=0;j<myReqs.length;j++){
+        var r=myReqs[j];
+        var originalIdx = reqs.indexOf(r);
+        if(!r || typeof r!=='object') continue;
+        var isResponseUnread = !r.readByStaff && (r.status==='approved' || r.status==='denied');
+        var isPending = r.status==='pending';
+        var bg = isResponseUnread ? '#B6F7C5' : (isPending ? '#FFF6CC' : '#fff');
+        var border = isResponseUnread ? '3px solid #111' : '2px solid #111';
+        var badge = '';
+        if(isResponseUnread){
+          badge = '<span style="background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:8px;font-weight:900">NEW RESPONSE</span>';
+        } else if(isPending){
+          badge = '<span style="background:#FFEB3B;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px;font-weight:900">PENDING</span>';
+        } else if(r.status==='approved'){
+          badge = '<span style="background:#B6F7C5;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px;font-weight:900">APPROVED</span>';
+        } else if(r.status==='denied'){
+          badge = '<span style="background:#E5E5E5;color:#111;border-radius:9999px;padding:2px 6px;font-size:8px;font-weight:900">DENIED</span>';
+        }
+        html+='<div class="card" style="padding:10px;background:'+bg+';border:'+border+'">';
+        html+='<div style="font-weight:900;font-size:11px;display:flex;justify-content:space-between;align-items:center"><span>'+(r.type||'')+' - '+(r.shiftDate||'')+'</span>'+badge+'</div>';
+        html+='<div style="font-size:10px;margin:4px 0">Old: '+(r.oldShift||'')+' → New: '+(r.newShift||'')+'<br>Reason: '+(r.reason||'')+'<br>Status: <b>'+(r.status||'pending')+'</b> - '+new Date(r.ts||Date.now()).toLocaleString()+'</div>';
+        html+='<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">';
+        if(isResponseUnread){
+          html+='<button onclick="markMyRequestRead('+originalIdx+')" style="background:#111;color:#fff;border-radius:9999px;padding:6px 10px;font-weight:900;font-size:10px">MARK READ</button>';
+        }
+        // Staff can delete/undo if they made errors - especially pending requests
+        if(isPending){
+          html+='<button onclick="deleteMyRequest('+originalIdx+')" style="background:#E30613;color:#fff;border:2px solid #111;border-radius:9999px;padding:6px 10px;font-weight:900;font-size:10px">DELETE / UNDO</button>';
+        } else {
+          html+='<button onclick="deleteMyRequest('+originalIdx+')" style="background:#fff;border:2px solid #111;border-radius:9999px;padding:6px 10px;font-weight:900;font-size:10px">DELETE</button>';
+        }
+        html+='</div></div>';
+      }
+    } else {
+      html+='<div class="card" style="padding:10px">No requests yet</div>';
     }
-    html+='<div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%;font-size:11px">← BACK</button></div>';
+    html+='<div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%;font-size:11px">BACK</button></div>';
     el.innerHTML=html;
-    setTimeout(function(){ try{ onReqTypeChange(); }catch(e){ console.log('onReqTypeChange error', e); } },50);
+    setTimeout(function(){ try{ onReqTypeChange(); }catch(e){} },50);
   }
 }
+
+function updateRequestsBadge(){
+  try{
+    var reqs=safeGetJSON('retail_roster_requests_v2',[]);
+    if(!Array.isArray(reqs)) reqs=[];
+    var isMgr=isManagerRole(getActualRole());
+    var btn=document.getElementById('btn-requests');
+    if(!btn) return;
+    var count=0;
+    var myUsername=(safeGet('repco_username')||'').toLowerCase();
+    if(isMgr){
+      // Admin: count pending unread
+      count=reqs.filter(function(r){ return r && r.status==='pending' && !r.readByAdmin; }).length;
+    } else {
+      // Staff: count responses unread
+      count=reqs.filter(function(r){ return r && r.username && r.username.toLowerCase()===myUsername && !r.readByStaff && (r.status==='approved' || r.status==='denied'); }).length;
+    }
+    // Remove old badge
+    var oldBadge=document.getElementById('requests-badge');
+    if(oldBadge) oldBadge.remove();
+    if(count>0){
+      var badge=document.createElement('span');
+      badge.id='requests-badge';
+      badge.textContent=count>99?'99+':String(count);
+      badge.style.cssText='background:#E30613;color:#fff;border-radius:9999px;padding:2px 6px;font-size:10px;font-weight:900;margin-left:6px;animation:pulse 1s infinite';
+      btn.appendChild(badge);
+      // Also add dot to button
+      btn.style.background='#FFFBCC';
+      btn.style.border='3px solid #E30613';
+      btn.style.position='relative';
+    } else {
+      btn.style.background='';
+      btn.style.border='';
+    }
+  }catch(e){ console.error('updateRequestsBadge error', e); }
+}
+
+function markRequestRead(idx){
+  try{
+    var reqs=safeGetJSON('retail_roster_requests_v2',[]);
+    if(reqs[idx]){
+      reqs[idx].readByAdmin=true;
+      reqs[idx].readTs=Date.now();
+      safeSetJSON('retail_roster_requests_v2', reqs);
+      renderRequests();
+      updateRequestsBadge();
+      try{ debouncedCloudSave(); }catch(e){}
+      toast('Marked as read');
+    }
+  }catch(e){ toast('Error: '+e.message); }
+}
+
+function markRequestUnread(idx){
+  try{
+    var reqs=safeGetJSON('retail_roster_requests_v2',[]);
+    if(reqs[idx]){
+      reqs[idx].readByAdmin=false;
+      safeSetJSON('retail_roster_requests_v2', reqs);
+      renderRequests();
+      updateRequestsBadge();
+      try{ debouncedCloudSave(); }catch(e){}
+      toast('Marked as unread');
+    }
+  }catch(e){ toast('Error: '+e.message); }
+}
+
+function markAllRequestsRead(){
+  try{
+    var reqs=safeGetJSON('retail_roster_requests_v2',[]);
+    for(var i=0;i<reqs.length;i++){
+      if(reqs[i] && reqs[i].status==='pending'){
+        reqs[i].readByAdmin=true;
+        reqs[i].readTs=Date.now();
+      }
+    }
+    safeSetJSON('retail_roster_requests_v2', reqs);
+    renderRequests();
+    updateRequestsBadge();
+    try{ debouncedCloudSave(); }catch(e){}
+    toast('All marked as read');
+  }catch(e){ toast('Error: '+e.message); }
+}
+
+function markMyRequestRead(idx){
+  try{
+    var reqs=safeGetJSON('retail_roster_requests_v2',[]);
+    if(reqs[idx]){
+      reqs[idx].readByStaff=true;
+      reqs[idx].readByStaffTs=Date.now();
+      safeSetJSON('retail_roster_requests_v2', reqs);
+      renderRequests();
+      updateRequestsBadge();
+      try{ debouncedCloudSave(); }catch(e){}
+      toast('Marked as read');
+    }
+  }catch(e){ toast('Error: '+e.message); }
+}
+
+function markAllMyRequestsRead(){
+  try{
+    var myUsername=(safeGet('repco_username')||'').toLowerCase();
+    var reqs=safeGetJSON('retail_roster_requests_v2',[]);
+    for(var i=0;i<reqs.length;i++){
+      if(reqs[i] && reqs[i].username && reqs[i].username.toLowerCase()===myUsername && (reqs[i].status==='approved' || reqs[i].status==='denied')){
+        reqs[i].readByStaff=true;
+        reqs[i].readByStaffTs=Date.now();
+      }
+    }
+    safeSetJSON('retail_roster_requests_v2', reqs);
+    renderRequests();
+    updateRequestsBadge();
+    try{ debouncedCloudSave(); }catch(e){}
+    toast('All marked as read');
+  }catch(e){ toast('Error: '+e.message); }
+}
+
+function deleteRequest(idx){
+  showCustomConfirm('Delete Request?', '<div style="font-size:11px">Delete this request permanently?<br><br>This cannot be undone.</div>', function(confirmed){
+    if(!confirmed) return;
+    try{
+      var reqs=safeGetJSON('retail_roster_requests_v2',[]);
+      if(idx>=0 && idx<reqs.length){
+        reqs.splice(idx,1);
+        safeSetJSON('retail_roster_requests_v2', reqs);
+        renderRequests();
+        updateRequestsBadge();
+        try{ debouncedCloudSave(); }catch(e){}
+        toast('Request deleted');
+      }
+    }catch(e){ toast('Error: '+e.message); }
+  });
+}
+
+function deleteMyRequest(idx){
+  showCustomConfirm('Delete / Undo Request?', '<div style="font-size:11px">Delete this request?<br><br>If you made an error, you can delete and submit again.<br><br>This will remove the request permanently.</div>', function(confirmed){
+    if(!confirmed) return;
+    try{
+      var reqs=safeGetJSON('retail_roster_requests_v2',[]);
+      if(idx>=0 && idx<reqs.length){
+        var r=reqs[idx];
+        // Only allow staff to delete their own
+        var myUsername=(safeGet('repco_username')||'').toLowerCase();
+        if(r.username && r.username.toLowerCase()!==myUsername && !isManagerRole(getActualRole())){
+          toast('You can only delete your own requests');
+          return;
+        }
+        reqs.splice(idx,1);
+        safeSetJSON('retail_roster_requests_v2', reqs);
+        renderRequests();
+        updateRequestsBadge();
+        try{ debouncedCloudSave(); }catch(e){}
+        toast('Request deleted / undone');
+      }
+    }catch(e){ toast('Error: '+e.message); }
+  });
+}
+
+// Patch approveReq and denyReq to mark as unread for staff and read for admin
+var originalApproveReq = typeof approveReq !== 'undefined' ? approveReq : null;
+var originalDenyReq = typeof denyReq !== 'undefined' ? denyReq : null;
+
+function approveReq(idx){
+  try{
+    var reqs=safeGetJSON('retail_roster_requests_v2',[]);
+    if(reqs[idx]){
+      // Mark as read by admin when actioned
+      reqs[idx].readByAdmin=true;
+      reqs[idx].status='approved';
+      reqs[idx].readByStaff=false; // Make it unread for staff so they see new response
+      reqs[idx].respondedTs=Date.now();
+      reqs[idx].respondedBy=safeGet('repco_username')||'admin';
+      safeSetJSON('retail_roster_requests_v2', reqs);
+      
+      // Apply the shift change if it's a shift correction
+      try{
+        var r=reqs[idx];
+        if(r.type==='shift-correction' && r.shiftIdx!==undefined){
+          var fns=safeGetJSON('retail_roster_byFortnight_v1',[]);
+          for(var fi=0;fi<fns.length;fi++){
+            var fn=fns[fi];
+            if(fn.dates && fn.dates[r.shiftIdx]){
+              for(var si=0;si<fn.staff.length;si++){
+                var s=fn.staff[si];
+                if(s.firstName && r.username && (s.firstName.toLowerCase()===r.username.toLowerCase() || (s.firstName+' '+s.lastName).toLowerCase()===r.username.toLowerCase() || s.lastName.toLowerCase()===r.username.toLowerCase())){
+                  if(r.newShift){
+                    if(r.newShift.toUpperCase()==='AB'){
+                      s.absentApproved=s.absentApproved||{};
+                      s.absentApproved[r.shiftIdx]=true;
+                    } else {
+                      s.shifts[r.shiftIdx]=r.newShift;
+                      s.absentApproved=s.absentApproved||{};
+                      s.absentApproved[r.shiftIdx]=false;
+                    }
+                  }
+                  break;
+                }
+              }
+            }
+          }
+          safeSetJSON('retail_roster_byFortnight_v1', fns);
+        }
+      }catch(e){ console.error('Apply shift correction error', e); }
+      
+      renderRequests();
+      updateRequestsBadge();
+      try{ debouncedCloudSave(); }catch(e){}
+      toast('Approved - staff will be notified');
+      renderRosterSafe();
+    }
+  }catch(e){ toast('Error: '+e.message); }
+}
+
+function denyReq(idx){
+  try{
+    var reqs=safeGetJSON('retail_roster_requests_v2',[]);
+    if(reqs[idx]){
+      reqs[idx].readByAdmin=true;
+      reqs[idx].status='denied';
+      reqs[idx].readByStaff=false; // Make unread for staff
+      reqs[idx].respondedTs=Date.now();
+      reqs[idx].respondedBy=safeGet('repco_username')||'admin';
+      safeSetJSON('retail_roster_requests_v2', reqs);
+      renderRequests();
+      updateRequestsBadge();
+      try{ debouncedCloudSave(); }catch(e){}
+      toast('Denied - staff will be notified');
+    }
+  }catch(e){ toast('Error: '+e.message); }
+}
+
+// Update badge on load and periodically
+setTimeout(function(){ try{ updateRequestsBadge(); }catch(e){} }, 1000);
+setInterval(function(){ try{ updateRequestsBadge(); }catch(e){} }, 10000);
+
 
 
 function renderAccountPage(){
@@ -2360,6 +2580,13 @@ function openAdmin(){ const m=document.getElementById("admin-modal"); if(m){ m.c
 function closeAdmin(){ const m=document.getElementById("admin-modal"); if(m){ m.classList.remove("show"); m.style.display="none"; } }
 document.addEventListener('keydown', function(e){ if(e.key==='Escape'){ const m=document.getElementById('admin-modal'); if(m && m.style.display==='flex') closeAdmin(); } });
 
+
+let undoStack=[]; const MAX_UNDO=50;
+function pushUndo(){ try{ var fns=safeGetJSON('retail_roster_byFortnight_v1',[]); var snap=JSON.stringify(fns); undoStack.push({fns:snap, ts:Date.now(), by:safeGet('repco_username')||'admin'}); if(undoStack.length>MAX_UNDO) undoStack.shift(); localStorage.setItem('repco_undo_stack', JSON.stringify(undoStack.slice(-20))); updateUndoButton(); }catch(e){} }
+function undoLastEdit(){ try{ if(undoStack.length===0){ var saved=localStorage.getItem('repco_undo_stack'); if(saved){ try{ undoStack=JSON.parse(saved); }catch(e){ undoStack=[]; } } } if(undoStack.length===0){ toast('Nothing to undo'); return; } var last=undoStack.pop(); if(!last||!last.fns){ toast('Nothing to undo'); return; } showCustomConfirm('Undo Last Edit?', '<div style="font-size:11px">Undo last edit at '+new Date(last.ts).toLocaleString()+' by '+(last.by||'admin')+'?</div>', function(confirmed){ if(!confirmed){ undoStack.push(last); return; } try{ var fns=JSON.parse(last.fns); safeSetJSON('retail_roster_byFortnight_v1',fns); localStorage.setItem('repco_undo_stack', JSON.stringify(undoStack)); renderRosterSafe(); updateUndoButton(); toast('Undone'); try{ debouncedCloudSave(); }catch(e){} }catch(e){ toast('Undo failed: '+e.message); } }); }catch(e){ toast('Undo error: '+e.message); } }
+function updateUndoButton(){ var btn=document.getElementById('undo-btn'); if(btn){ btn.style.display=undoStack.length>0?'inline-block':'none'; btn.textContent='UNDO ('+undoStack.length+')'; } }
+try{ var savedStack=localStorage.getItem('repco_undo_stack'); if(savedStack){ undoStack=JSON.parse(savedStack); } }catch(e){ undoStack=[]; }
+
 </script>
 <div id="hidden-staff-page" class="full-page" style="display:none">
   <div class="r-header-consistent"><div class="r-title-consistent"><span>REPCO</span> ROSTER - HIDDEN STAFF</div><div class="r-btns-consistent"><button class="r-btn-consistent" onclick="showMain()">ROSTER</button><button class="r-btn-consistent" onclick="doLogout()">LOG OUT</button></div></div>
@@ -2384,79 +2611,3 @@ document.addEventListener('keydown', function(e){ if(e.key==='Escape'){ const m=
 </div>
 </body>
 </html>
-
-
-
-
-
-
-
-
-
-
-function renderRequests(){
-  const el=document.getElementById('requests-list');
-  if(!el) return;
-  const isMgr=isManagerRole(getActualRole());
-  let reqs=safeGetJSON('retail_roster_requests_v2',[]);
-  if(!Array.isArray(reqs)) reqs=[];
-  if(isMgr){
-    if(reqs.length===0){ el.innerHTML='<div class="card" style="padding:10px">No pending requests</div><div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%;font-size:11px">← BACK</button></div>'; return; }
-    el.innerHTML=reqs.map(function(r,i){ 
-      if(!r || typeof r!=='object') return '<div class="card" style="padding:10px">'+String(r)+'</div>';
-      return '<div class="card" style="padding:10px"><div style="font-weight:900;font-size:11px">'+(r.type||'request')+' - '+(r.username||'')+' - '+(r.shiftDate||(r.dates&&r.dates[0])||'')+'</div><div style="font-size:11px">'+(r.reason||'')+' - '+ (r.newShift||'')+'</div><div style="margin-top:6px"><button onclick="approveReq('+i+')" style="background:#111;color:#fff;border-radius:9999px;padding:6px 10px;font-weight:900;margin-right:6px;font-size:10px">APPROVE</button><button onclick="denyReq('+i+')" style="background:#fff;border:2px solid #111;border-radius:9999px;padding:6px 10px;font-weight:900;font-size:10px">DENY</button></div></div>'; 
-    }).join('') + '<div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%;font-size:11px">← BACK</button></div>';
-  } else {
-    const cur=getCurrentFortnight();
-    const myStaff=cur?findMyStaff(cur):null;
-    let options='';
-    if(myStaff && cur && cur.dates){
-      cur.dates.forEach((d,i)=>{
-        const sh=(myStaff && myStaff.shifts && myStaff.shifts[i]) ? myStaff.shifts[i] : 'OFF';
-        if(sh && sh.toUpperCase()!=='OFF' && sh!=='NA' && sh.toUpperCase()!=='AB'){
-          options+='<option value="'+i+'">'+d.day+' '+d.date+' - '+fmt(sh)+'</option>';
-        }
-      });
-    }
-    if(!options) options='<option value="">No shifts found</option>';
-    let html='<div class="card" style="padding:10px"><div style="font-weight:900;font-size:12px;margin-bottom:8px">SUBMIT REQUEST</div>';
-    html+='<label style="font-weight:900;font-size:10px">TYPE</label><select id="req-type" onchange="onReqTypeChange()" style="width:100%;padding:8px;border-radius:9999px;border:2px solid #111;margin:4px 0 8px 0;font-size:11px"><option value="unavailability">Unavailability</option><option value="shift-correction">Shift Correction</option></select>';
-    html+='<div id="req-dynamic-area"></div></div>';
-    const myUsername=(safeGet('repco_username')||'').toLowerCase();
-    const myReqs=reqs.filter(function(r){ return r && r.username && r.username.toLowerCase()===myUsername; });
-    if(myReqs.length>0){
-      html+='<div class="card" style="padding:10px"><div style="font-weight:900;font-size:11px">MY REQUESTS ('+myReqs.length+')</div>';
-      myReqs.forEach(function(r){
-        if(!r || typeof r!=='object') return;
-        const date=r.shiftDate||(r.dates&&r.dates[0])||''; const status=r.status||'pending';
-        html+='<div style="border-top:1px solid #ddd;padding:6px 0;font-size:10px"><b>'+(r.type||'')+'</b> - '+date+' - '+status+'<br>'+(r.reason||'')+'</div>';
-      });
-      html+='</div>';
-    }
-    html+='<div class="card"><button onclick="showMain()" style="background:#111;color:#fff;border-radius:9999px;padding:8px 12px;font-weight:900;width:100%;font-size:11px">← BACK</button></div>';
-    el.innerHTML=html;
-    setTimeout(function(){ try{ onReqTypeChange(); }catch(e){} },50);
-  }
-}
-
-
-
-
-function changePassword(){
-  const newU=(document.getElementById('new-username').value||'').trim(); const newP=(document.getElementById('new-pass').value||'').trim(); if(!newU){ toast('Username required'); return; } const oldUsername=safeGet('repco_username'); let users=safeGetJSON('retail_roster_users_v1',[]); let idx=users.findIndex(u=>u.username.toLowerCase()===oldUsername.toLowerCase()); if(idx===-1){ toast('User not found'); return; } if(newU.toLowerCase()!==oldUsername.toLowerCase() && users.some(u=>u.username.toLowerCase()===newU.toLowerCase())){ toast('Username taken'); return; } users[idx].username=newU; if(newP) users[idx].password=newP; safeSetJSON('retail_roster_users_v1',users); safeSet('repco_username',newU); safeSetJSON('retail_roster_session_v1',{...users[idx]}); toast('Saved - new username: '+newU); renderAccountPage();
-}
-
-
-
-function applyRoleVisibility(){
-  const actualRole=getActualRole(); const isMgr=isManagerRole(actualRole);
-  const archiveBtn=document.getElementById('btn-archive'); if(archiveBtn){ archiveBtn.style.display='none'; archiveBtn.remove(); }
-  document.querySelectorAll('.r-btn-consistent').forEach(btn=>{ if(btn.textContent.trim().toUpperCase()==='ARCHIVE'){ btn.style.display='none'; btn.remove(); } });
-  let adminHiddenIds=['btn-today','btn-tomorrow','btn-mysched','btn-archive']; let staffHiddenIds=['btn-unavail','btn-options','btn-hidden','btn-archive'];
-  let allIds={'btn-unavail':1,'btn-today':1,'btn-tomorrow':1,'btn-mysched':1,'btn-options':1,'btn-archive':1,'btn-account':1,'btn-hidden':1,'btn-requests':1,'btn-roster':1};
-  Object.keys(allIds).forEach(id=>{ let el=document.getElementById(id); if(!el) return; if(id==='btn-archive'){ el.style.display='none'; el.remove(); return; } if(isMgr){ if(adminHiddenIds.includes(id)){ el.style.display='none'; } else { el.style.display='inline-block'; } } else { if(staffHiddenIds.includes(id)){ el.style.display='none'; } else { el.style.display='inline-block'; } } });
-  let delBtn=document.getElementById('delete-roster-btn'); if(delBtn) delBtn.style.display = isMgr ? 'inline-block' : 'none';
-  let importBtn=document.getElementById('btn-import'); let csvBtn=document.getElementById('btn-export-csv'); let pdfBtn=document.getElementById('btn-export-pdf'); if(importBtn) importBtn.style.display = isMgr ? 'inline-block' : 'none'; if(csvBtn) csvBtn.style.display = isMgr ? 'inline-block' : 'none'; if(pdfBtn) pdfBtn.style.display = isMgr ? 'inline-block' : 'none';
-  let myCard=document.getElementById('my-schedule-card'); if(myCard) myCard.style.display='none';
-}
-
